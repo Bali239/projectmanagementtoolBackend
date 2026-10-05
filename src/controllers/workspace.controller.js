@@ -5,8 +5,17 @@ import User from "../models/user.model.js";
 import Workspace from "../models/workspace.model.js";
 import WorkspaceInvitation from "../models/workspace-invitation.model.js";
 import WorkspaceMember from "../models/workspace-member.model.js";
-import { createInvitationSchema, createWorkspaceSchema } from "../schemas/workspace.schema.js";
+import { createInvitationSchema, createWorkspaceSchema, updateWorkspaceSchema } from "../schemas/workspace.schema.js";
 import { WorkspaceInvitationError, createWorkspaceInvitation } from "../services/workspace-invitation.service.js";
+import { CloudinaryConfigurationError } from "../config/cloudinary.js";
+import { deleteWorkspacePhoto, uploadWorkspacePhoto } from "../services/workspace-photo.service.js";
+import {
+  releaseWorkspaceMembership,
+  reserveWorkspaceCreation,
+  reserveWorkspaceMembership,
+  WorkspaceLimitError,
+  workspaceLimits,
+} from "../services/workspace-capacity.service.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 import { parseWorkspaceInvitationCsv, WorkspaceCsvError } from "../utils/workspace-invitation-csv.js";
 
@@ -21,34 +30,57 @@ function tokenHash(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function toWorkspace(workspace, role) {
+function toWorkspace(workspace, role, userId) {
   return {
     id: workspace._id.toString(),
     name: workspace.name,
     timezone: workspace.timezone,
+    photoUrl: workspace.photoUrl || null,
+    isCreator: String(workspace.createdBy) === String(userId),
     role,
   };
 }
 
 export const getCurrentWorkspace = async (request, response) => {
-  const membership = await WorkspaceMember.findOne({ userId: request.authenticatedUserId })
-    .populate("workspaceId", "name timezone");
+  const workspaceId = request.get("X-Workspace-Id");
+  if (!workspaceId || !mongoose.isValidObjectId(workspaceId)) return response.json({ workspace: null });
+  const membership = await WorkspaceMember.findOne({ userId: request.authenticatedUserId, workspaceId })
+    .populate("workspaceId", "name timezone photoUrl createdBy");
   if (!membership?.workspaceId) return response.json({ workspace: null });
-  return response.json({ workspace: toWorkspace(membership.workspaceId, membership.role) });
+  return response.json({ workspace: toWorkspace(membership.workspaceId, membership.role, request.authenticatedUserId) });
+};
+
+export const listUserWorkspaces = async (request, response) => {
+  const [memberships, user] = await Promise.all([
+    WorkspaceMember.find({ userId: request.authenticatedUserId })
+      .populate("workspaceId", "name timezone photoUrl createdBy")
+      .sort({ createdAt: 1 }),
+    User.findById(request.authenticatedUserId).select("createdWorkspaceCount workspaceMembershipCount"),
+  ]);
+
+  return response.json({
+    workspaces: memberships
+      .filter((membership) => membership.workspaceId)
+      .map((membership) => toWorkspace(membership.workspaceId, membership.role, request.authenticatedUserId)),
+    limits: {
+      createdCount: user?.createdWorkspaceCount || 0,
+      createdLimit: workspaceLimits.created,
+      membershipCount: user?.workspaceMembershipCount || 0,
+      membershipLimit: workspaceLimits.memberships,
+    },
+  });
 };
 
 export const createWorkspace = async (request, response) => {
   const input = parseInput(createWorkspaceSchema, request, response);
   if (!input) return;
-  if (await WorkspaceMember.exists({ userId: request.authenticatedUserId })) {
-    return response.status(409).json({ error: "You already belong to a workspace." });
-  }
 
   const timezone = input.timezone || process.env.DEFAULT_WORKSPACE_TIMEZONE || "UTC";
   const session = await mongoose.startSession();
   let workspace;
   try {
     await session.withTransaction(async () => {
+      await reserveWorkspaceCreation(request.authenticatedUserId, session);
       [workspace] = await Workspace.create([{
         name: input.name,
         timezone,
@@ -68,13 +100,62 @@ export const createWorkspace = async (request, response) => {
       });
     });
   } catch (error) {
-    if (error.code === 11000) return response.status(409).json({ error: "You already belong to a workspace." });
+    if (error instanceof WorkspaceLimitError) return response.status(error.statusCode).json({ error: error.message });
+    if (error.code === 11000) return response.status(409).json({ error: "You already belong to this workspace." });
     throw error;
   } finally {
     await session.endSession();
   }
 
-  return response.status(201).json({ workspace: toWorkspace(workspace, "admin") });
+  return response.status(201).json({ workspace: toWorkspace(workspace, "admin", request.authenticatedUserId) });
+};
+
+export const updateWorkspace = async (request, response) => {
+  const input = parseInput(updateWorkspaceSchema, request, response);
+  if (!input) return;
+  if (input.name === undefined && !request.file) {
+    return response.status(400).json({ error: "Provide a workspace name or photo to update." });
+  }
+
+  const workspace = await Workspace.findById(request.workspace._id).select("+photoPublicId");
+  if (!workspace) return response.status(404).json({ error: "Workspace not found." });
+
+  let uploadedPhoto;
+  if (request.file) {
+    try {
+      uploadedPhoto = await uploadWorkspacePhoto(request.file.buffer);
+    } catch (error) {
+      if (error instanceof CloudinaryConfigurationError) {
+        return response.status(503).json({ error: error.message });
+      }
+      console.error("Workspace photo upload failed:", error.message);
+      return response.status(502).json({ error: "Workspace photo could not be uploaded." });
+    }
+  }
+
+  const previousPhotoPublicId = workspace.photoPublicId;
+  if (input.name !== undefined) workspace.name = input.name;
+  if (uploadedPhoto) {
+    workspace.photoUrl = uploadedPhoto.url;
+    workspace.photoPublicId = uploadedPhoto.publicId;
+  }
+
+  try {
+    await workspace.save();
+  } catch (error) {
+    if (uploadedPhoto) await deleteWorkspacePhoto(uploadedPhoto.publicId).catch(() => null);
+    throw error;
+  }
+
+  if (uploadedPhoto && previousPhotoPublicId && previousPhotoPublicId !== uploadedPhoto.publicId) {
+    await deleteWorkspacePhoto(previousPhotoPublicId).catch((error) => {
+      console.error("Previous workspace photo cleanup failed:", error.message);
+    });
+  }
+
+  return response.json({
+    workspace: toWorkspace(workspace, request.workspaceMembership.role, request.authenticatedUserId),
+  });
 };
 
 export const listWorkspaceMembers = async (request, response) => {
@@ -100,16 +181,27 @@ export const removeWorkspaceMember = async (request, response) => {
     return response.status(400).json({ error: "You cannot remove yourself from the workspace." });
   }
 
-  const removedMember = await WorkspaceMember.findOneAndDelete({
-    workspaceId: request.workspace._id,
-    userId: request.params.userId,
-    role: "member",
-  });
+  const session = await mongoose.startSession();
+  let removedMember;
+  try {
+    await session.withTransaction(async () => {
+      removedMember = await WorkspaceMember.findOneAndDelete({
+        workspaceId: request.workspace._id,
+        userId: request.params.userId,
+        role: "member",
+      }).session(session);
+      if (!removedMember) return;
+      await releaseWorkspaceMembership(request.params.userId, session);
+      await Task.updateMany(
+        { workspaceId: request.workspace._id, assigneeId: request.params.userId },
+        { $set: { assigneeId: null } },
+        { session }
+      );
+    });
+  } finally {
+    await session.endSession();
+  }
   if (!removedMember) return response.status(404).json({ error: "Workspace member not found." });
-  await Task.updateMany(
-    { workspaceId: request.workspace._id, assigneeId: request.params.userId },
-    { $set: { assigneeId: null } }
-  );
   return response.status(204).end();
 };
 
@@ -229,24 +321,19 @@ export const acceptInvitation = async (request, response) => {
   if (invitation.email !== user.email.toLowerCase()) {
     return response.status(403).json({ error: "Sign in with the email address this invitation was sent to." });
   }
-  const membership = await WorkspaceMember.findOne({ userId: user._id });
+  const membership = await WorkspaceMember.findOne({ userId: user._id, workspaceId: invitation.workspaceId });
   if (invitation.status === "accepted") {
-    if (!membership || String(membership.workspaceId) !== String(invitation.workspaceId)) {
-      return response.status(409).json({ error: "This invitation was accepted by another workspace membership." });
-    }
-    const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone");
-    return response.json({ workspace: toWorkspace(workspace, membership.role) });
+    if (!membership) return response.status(409).json({ error: "This invitation was accepted by another workspace membership." });
+    const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
+    return response.json({ workspace: toWorkspace(workspace, membership.role, request.authenticatedUserId) });
   }
   if (invitation.expiresAt <= new Date()) return response.status(404).json({ error: "This invitation is invalid or expired." });
   if (membership) {
-    if (String(membership.workspaceId) === String(invitation.workspaceId)) {
-      invitation.status = "accepted";
-      invitation.acceptedAt = new Date();
-      await invitation.save();
-      const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone");
-      return response.json({ workspace: toWorkspace(workspace, membership.role) });
-    }
-    return response.status(409).json({ error: "You already belong to a workspace. Leave it before accepting this invitation." });
+    invitation.status = "accepted";
+    invitation.acceptedAt = new Date();
+    await invitation.save();
+    const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
+    return response.json({ workspace: toWorkspace(workspace, membership.role, request.authenticatedUserId) });
   }
 
   const session = await mongoose.startSession();
@@ -255,6 +342,7 @@ export const acceptInvitation = async (request, response) => {
       const invitedWorkspace = await Workspace.findById(invitation.workspaceId)
         .select("timezone")
         .session(session);
+      await reserveWorkspaceMembership(user._id, session);
       await WorkspaceMember.create([{
         workspaceId: invitation.workspaceId,
         userId: user._id,
@@ -274,22 +362,25 @@ export const acceptInvitation = async (request, response) => {
       if (!accepted) throw new Error("Invitation is no longer pending.");
     });
   } catch (error) {
+    if (error instanceof WorkspaceLimitError) {
+      return response.status(error.statusCode).json({ error: error.message });
+    }
     if (error.code === 11000) {
       const [acceptedInvite, acceptedMembership] = await Promise.all([
         WorkspaceInvitation.findOne({ _id: invitation._id, status: "accepted" }),
         WorkspaceMember.findOne({ userId: user._id, workspaceId: invitation.workspaceId }),
       ]);
       if (acceptedInvite && acceptedMembership) {
-        const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone");
-        return response.json({ workspace: toWorkspace(workspace, acceptedMembership.role) });
+        const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
+        return response.json({ workspace: toWorkspace(workspace, acceptedMembership.role, request.authenticatedUserId) });
       }
-      return response.status(409).json({ error: "You already belong to a workspace." });
+      return response.status(409).json({ error: "You already belong to this workspace." });
     }
     throw error;
   } finally {
     await session.endSession();
   }
 
-  const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone");
-  return response.json({ workspace: toWorkspace(workspace, "member") });
+  const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
+  return response.json({ workspace: toWorkspace(workspace, "member", request.authenticatedUserId) });
 };

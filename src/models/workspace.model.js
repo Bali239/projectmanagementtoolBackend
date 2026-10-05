@@ -8,6 +8,15 @@ const workspaceSchema = new mongoose.Schema(
       trim: true,
       maxlength: 100,
     },
+    photoUrl: {
+      type: String,
+      default: null,
+    },
+    photoPublicId: {
+      type: String,
+      default: null,
+      select: false,
+    },
     timezone: {
       type: String,
       required: true,

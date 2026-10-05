@@ -6,6 +6,7 @@ import Workspace from "../models/workspace.model.js";
 import WorkspaceInvitation from "../models/workspace-invitation.model.js";
 import WorkspaceMember from "../models/workspace-member.model.js";
 import JobLock from "../models/job-lock.model.js";
+import { migrateWorkspaceMemberships } from "../utils/migrate-workspace-memberships.js";
 
 export const connectDB = async () => {
   const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL;
@@ -19,6 +20,7 @@ export const connectDB = async () => {
     (index) => index.key?.googleId === 1 && index.unique && !index.sparse
   );
   if (legacyGoogleIdIndex) await User.collection.dropIndex(legacyGoogleIdIndex.name);
+  await migrateWorkspaceMemberships();
   await Promise.all([
     User.init(),
     Task.init(),

@@ -31,11 +31,20 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
+  CLOUDINARY_CLOUD_NAME: z.string().trim().optional(),
+  CLOUDINARY_API_KEY: z.string().trim().optional(),
+  CLOUDINARY_API_SECRET: z.string().trim().optional(),
   DEFAULT_WORKSPACE_TIMEZONE: timezoneSchema.default("UTC"),
   OVERDUE_REMINDER_TIMES: reminderTimesSchema.default("09:00,17:00"),
 }).refine((env) => env.MONGODB_URI || env.MONGO_URL, {
   message: "MONGODB_URI is required",
   path: ["MONGODB_URI"],
+}).refine((env) => {
+  const cloudinaryCredentials = [env.CLOUDINARY_CLOUD_NAME, env.CLOUDINARY_API_KEY, env.CLOUDINARY_API_SECRET];
+  return cloudinaryCredentials.every(Boolean) || cloudinaryCredentials.every((value) => !value);
+}, {
+  message: "Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET together.",
+  path: ["CLOUDINARY_CLOUD_NAME"],
 });
 
 export function loadEnv() {

@@ -14,6 +14,10 @@ export const createWorkspaceSchema = z.object({
   timezone: timezoneSchema.optional(),
 });
 
+export const updateWorkspaceSchema = z.object({
+  name: z.string().trim().min(2).max(100).optional(),
+});
+
 export const createInvitationSchema = z.object({
   email: z.string().trim().email().toLowerCase(),
 });

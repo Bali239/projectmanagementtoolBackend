@@ -9,6 +9,7 @@ import { isEmailServiceConfigured, sendEmailVerificationEmail, sendPasswordReset
 import { notifyAuthActivity } from "../services/auth-notification.service.js";
 import { clearSessionCookie, issueSession, toAuthUser } from "../utils/session.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
+import { reserveWorkspaceMembership, WorkspaceLimitError } from "../services/workspace-capacity.service.js";
 
 const passwordHashRounds = 12;
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -160,34 +161,45 @@ export const verifyEmailAddress = async (request, response) => {
     expiresAt: { $gt: new Date() },
   });
   let joinedWorkspace = false;
-  if (pendingInvitation && !(await WorkspaceMember.exists({ userId: user._id }))) {
+  if (pendingInvitation) {
+    const existingMembership = await WorkspaceMember.findOne({
+      userId: user._id,
+      workspaceId: pendingInvitation.workspaceId,
+    });
     const session = await User.startSession();
     try {
-      await session.withTransaction(async () => {
-        const invitedWorkspace = await Workspace.findById(pendingInvitation.workspaceId)
-          .select("timezone")
-          .session(session);
-        await WorkspaceMember.create([{
-          workspaceId: pendingInvitation.workspaceId,
-          userId: user._id,
-          role: "member",
-        }], { session });
-        await migrateLegacyTasks({
-          userId: user._id,
-          workspaceId: pendingInvitation.workspaceId,
-          timezone: invitedWorkspace.timezone,
-          session,
+      if (existingMembership) {
+        pendingInvitation.status = "accepted";
+        pendingInvitation.acceptedAt = new Date();
+        await pendingInvitation.save();
+      } else {
+        await session.withTransaction(async () => {
+          const invitedWorkspace = await Workspace.findById(pendingInvitation.workspaceId)
+            .select("timezone")
+            .session(session);
+          await reserveWorkspaceMembership(user._id, session);
+          await WorkspaceMember.create([{
+            workspaceId: pendingInvitation.workspaceId,
+            userId: user._id,
+            role: "member",
+          }], { session });
+          await migrateLegacyTasks({
+            userId: user._id,
+            workspaceId: pendingInvitation.workspaceId,
+            timezone: invitedWorkspace.timezone,
+            session,
+          });
+          const accepted = await WorkspaceInvitation.findOneAndUpdate(
+            { _id: pendingInvitation._id, status: "pending", expiresAt: { $gt: new Date() } },
+            { $set: { status: "accepted", acceptedAt: new Date() } },
+            { new: true, session }
+          );
+          if (!accepted) throw new Error("Invitation is no longer pending");
         });
-        const accepted = await WorkspaceInvitation.findOneAndUpdate(
-          { _id: pendingInvitation._id, status: "pending", expiresAt: { $gt: new Date() } },
-          { $set: { status: "accepted", acceptedAt: new Date() } },
-          { new: true, session }
-        );
-        if (!accepted) throw new Error("Invitation is no longer pending");
-      });
+      }
       joinedWorkspace = true;
     } catch (error) {
-      if (error.code !== 11000) throw error;
+      if (error.code !== 11000 && !(error instanceof WorkspaceLimitError)) throw error;
     } finally {
       await session.endSession();
     }

@@ -26,8 +26,8 @@ export async function createWorkspaceInvitation({ workspaceId, inviterId, email 
 
   const normalizedEmail = email.trim().toLowerCase();
   const existingUser = await User.findOne({ email: normalizedEmail }).select("_id");
-  if (existingUser && await WorkspaceMember.exists({ userId: existingUser._id })) {
-    throw new WorkspaceInvitationError("This person already belongs to a workspace.", 409);
+  if (existingUser && await WorkspaceMember.exists({ userId: existingUser._id, workspaceId })) {
+    throw new WorkspaceInvitationError("This person already belongs to this workspace.", 409);
   }
 
   const workspace = await Workspace.findById(workspaceId).select("name");

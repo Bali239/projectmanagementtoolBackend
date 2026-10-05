@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import User from "../src/models/user.model.js";
 import WorkspaceMember from "../src/models/workspace-member.model.js";
+import Workspace from "../src/models/workspace.model.js";
 import Task from "../src/models/task.model.js";
-import { requireWorkspace, requireWorkspaceAdmin } from "../src/middlewares/workspace.middleware.js";
+import { requireWorkspace, requireWorkspaceAdmin, requireWorkspaceCreator } from "../src/middlewares/workspace.middleware.js";
 import { localDueDateToUtc } from "../src/utils/date-time.js";
 import { parseWorkspaceInvitationCsv, WorkspaceCsvError } from "../src/utils/workspace-invitation-csv.js";
 import { getLocalReminderSlot } from "../src/services/overdue-task-scheduler.service.js";
@@ -10,7 +12,14 @@ import { migrateLegacyTasks } from "../src/utils/migrate-legacy-tasks.js";
 import { taskStatusInputSchema } from "../src/schemas/task-status.schema.js";
 import { taskStatusFilter } from "../src/utils/task-access.js";
 import { taskStatusNotificationCronExpression } from "../src/services/task-status-notification.service.js";
+import { listUserWorkspaces } from "../src/controllers/workspace.controller.js";
+import { updateWorkspaceSchema } from "../src/schemas/workspace.schema.js";
 import cron from "node-cron";
+import {
+  reserveWorkspaceCreation,
+  reserveWorkspaceMembership,
+  WorkspaceLimitError,
+} from "../src/services/workspace-capacity.service.js";
 
 function mockResponse() {
   return {
@@ -27,23 +36,116 @@ function mockResponse() {
   };
 }
 
-test("membership uniqueness enforces one workspace per user", () => {
+test("membership uniqueness is scoped to a workspace and user pair", () => {
   const uniqueIndexes = WorkspaceMember.schema.indexes().filter(([, options]) => options.unique);
-  assert.ok(uniqueIndexes.some(([keys]) => keys.userId === 1));
+  assert.ok(uniqueIndexes.some(([keys]) => keys.workspaceId === 1 && keys.userId === 1));
+  assert.equal(uniqueIndexes.some(([keys]) => keys.userId === 1 && Object.keys(keys).length === 1), false);
 });
 
-test("workspace middleware returns onboarding conflict for users without membership", async () => {
+test("workspace list preserves each workspace's membership role", async () => {
+  const originalFind = WorkspaceMember.find;
+  const originalFindById = User.findById;
+  const memberships = [
+    { workspaceId: { _id: { toString: () => "workspace-a" }, name: "Alpha", timezone: "UTC", photoUrl: "https://images.example/alpha.png", createdBy: "user-id" }, role: "admin" },
+    { workspaceId: { _id: { toString: () => "workspace-b" }, name: "Beta", timezone: "UTC", photoUrl: null, createdBy: "another-user" }, role: "member" },
+  ];
+  WorkspaceMember.find = () => ({
+    populate() { return this; },
+    sort: async () => memberships,
+  });
+  User.findById = () => ({
+    select: async () => ({ createdWorkspaceCount: 1, workspaceMembershipCount: 2 }),
+  });
+  const response = mockResponse();
+  try {
+    await listUserWorkspaces({ authenticatedUserId: "user-id" }, response);
+  } finally {
+    WorkspaceMember.find = originalFind;
+    User.findById = originalFindById;
+  }
+  assert.deepEqual(response.body.workspaces.map(({ id, name, role, photoUrl, isCreator }) => ({ id, name, role, photoUrl, isCreator })), [
+    { id: "workspace-a", name: "Alpha", role: "admin", photoUrl: "https://images.example/alpha.png", isCreator: true },
+    { id: "workspace-b", name: "Beta", role: "member", photoUrl: null, isCreator: false },
+  ]);
+  assert.deepEqual(response.body.limits, {
+    createdCount: 1,
+    createdLimit: 3,
+    membershipCount: 2,
+    membershipLimit: 5,
+  });
+});
+
+test("workspace creation atomically reserves both created and membership capacity", async () => {
+  const originalFindOneAndUpdate = User.findOneAndUpdate;
+  let updateArguments;
+  User.findOneAndUpdate = async (...arguments_) => {
+    updateArguments = arguments_;
+    return { _id: "user-id" };
+  };
+  try {
+    await reserveWorkspaceCreation("user-id", "session");
+  } finally {
+    User.findOneAndUpdate = originalFindOneAndUpdate;
+  }
+  assert.deepEqual(updateArguments[0], {
+    _id: "user-id",
+    createdWorkspaceCount: { $lt: 3 },
+    workspaceMembershipCount: { $lt: 5 },
+  });
+  assert.deepEqual(updateArguments[1], { $inc: { createdWorkspaceCount: 1, workspaceMembershipCount: 1 } });
+  assert.equal(updateArguments[2].session, "session");
+});
+
+test("workspace creation and joining reject users at their respective caps", async () => {
+  const originalFindOneAndUpdate = User.findOneAndUpdate;
+  const originalFindById = User.findById;
+  let counts;
+  User.findOneAndUpdate = async () => null;
+  User.findById = () => ({
+    session() { return this; },
+    select: async () => counts,
+  });
+  try {
+    counts = { createdWorkspaceCount: 3, workspaceMembershipCount: 3 };
+    await assert.rejects(reserveWorkspaceCreation("user-id", "session"), (error) =>
+      error instanceof WorkspaceLimitError && error.limit === "created"
+    );
+    counts = { createdWorkspaceCount: 2, workspaceMembershipCount: 5 };
+    await assert.rejects(reserveWorkspaceMembership("user-id", "session"), (error) =>
+      error instanceof WorkspaceLimitError && error.limit === "memberships"
+    );
+  } finally {
+    User.findOneAndUpdate = originalFindOneAndUpdate;
+    User.findById = originalFindById;
+  }
+});
+
+test("workspace middleware rejects a selected workspace without membership", async () => {
   const originalFindOne = WorkspaceMember.findOne;
   WorkspaceMember.findOne = () => ({ populate: async () => null });
   const response = mockResponse();
   let nextCalled = false;
   try {
-    await requireWorkspace({ authenticatedUserId: "user-id" }, response, () => { nextCalled = true; });
+    await requireWorkspace({ authenticatedUserId: "user-id", get: () => "507f1f77bcf86cd799439011" }, response, () => { nextCalled = true; });
+  } finally {
+    WorkspaceMember.findOne = originalFindOne;
+  }
+  assert.equal(response.statusCode, 403);
+  assert.equal(nextCalled, false);
+});
+
+test("workspace middleware requires an explicit selection", async () => {
+  const originalFindOne = WorkspaceMember.findOne;
+  let lookupCalled = false;
+  WorkspaceMember.findOne = () => { lookupCalled = true; };
+  const response = mockResponse();
+  try {
+    await requireWorkspace({ authenticatedUserId: "user-id", get: () => "" }, response, () => {});
   } finally {
     WorkspaceMember.findOne = originalFindOne;
   }
   assert.equal(response.statusCode, 409);
-  assert.equal(nextCalled, false);
+  assert.equal(lookupCalled, false);
 });
 
 test("workspace admin middleware rejects members", () => {
@@ -152,4 +254,27 @@ test("admins can change status of any task in their workspace", () => {
 test("task status notification cron runs every minute", () => {
   assert.equal(taskStatusNotificationCronExpression, "* * * * *");
   assert.equal(cron.validate(taskStatusNotificationCronExpression), true);
+});
+
+test("workspace stores a public photo URL and private Cloudinary asset ID", () => {
+  assert.equal(Workspace.schema.path("photoUrl").instance, "String");
+  assert.equal(Workspace.schema.path("photoUrl").defaultValue, null);
+  assert.equal(Workspace.schema.path("photoPublicId").options.select, false);
+});
+
+test("workspace creator middleware only allows the original creator", () => {
+  const response = mockResponse();
+  let nextCalled = false;
+  requireWorkspaceCreator({ workspace: { createdBy: "creator-id" }, authenticatedUserId: "member-id" }, response, () => { nextCalled = true; });
+  assert.equal(response.statusCode, 403);
+  assert.equal(nextCalled, false);
+
+  requireWorkspaceCreator({ workspace: { createdBy: "creator-id" }, authenticatedUserId: "creator-id" }, response, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+});
+
+test("workspace update schema validates names but permits photo-only updates", () => {
+  assert.equal(updateWorkspaceSchema.safeParse({ name: "  Studio  " }).data.name, "Studio");
+  assert.equal(updateWorkspaceSchema.safeParse({}).success, true);
+  assert.equal(updateWorkspaceSchema.safeParse({ name: " " }).success, false);
 });

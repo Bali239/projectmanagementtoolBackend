@@ -41,6 +41,18 @@ const userSchema = new mongoose.Schema(
       default: false,
       required: true,
     },
+    createdWorkspaceCount: {
+      type: Number,
+      min: 0,
+      default: 0,
+      required: true,
+    },
+    workspaceMembershipCount: {
+      type: Number,
+      min: 0,
+      default: 0,
+      required: true,
+    },
     emailVerificationTokenHash: {
       type: String,
       unique: true,

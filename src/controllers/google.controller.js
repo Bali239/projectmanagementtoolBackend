@@ -8,6 +8,7 @@ import WorkspaceInvitation from "../models/workspace-invitation.model.js";
 import WorkspaceMember from "../models/workspace-member.model.js";
 import Workspace from "../models/workspace.model.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
+import { reserveWorkspaceMembership, WorkspaceLimitError } from "../services/workspace-capacity.service.js";
 
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 const isProduction = process.env.NODE_ENV === "production";
@@ -105,12 +106,12 @@ export const handleGoogleOAuthCallback = async (request, response) => {
       });
       if (!invitation || invitation.email !== authenticatedUser.email.toLowerCase()) {
         await issueSession(response, authenticatedUser);
-        return response.redirect(`${frontendUrl()}/dashboard?inviteError=invalid`);
+        return response.redirect(`${frontendUrl()}/workspaces?inviteError=invalid`);
       }
 
-      if (await WorkspaceMember.exists({ userId: authenticatedUser._id })) {
+      if (await WorkspaceMember.exists({ userId: authenticatedUser._id, workspaceId: invitation.workspaceId })) {
         await issueSession(response, authenticatedUser);
-        return response.redirect(`${frontendUrl()}/dashboard?inviteError=already-member`);
+        return response.redirect(`${frontendUrl()}/workspaces?inviteError=already-member`);
       }
 
       const session = await mongoose.startSession();
@@ -119,6 +120,7 @@ export const handleGoogleOAuthCallback = async (request, response) => {
           const invitedWorkspace = await Workspace.findById(invitation.workspaceId)
             .select("timezone")
             .session(session);
+          await reserveWorkspaceMembership(authenticatedUser._id, session);
           await WorkspaceMember.create([{
             workspaceId: invitation.workspaceId,
             userId: authenticatedUser._id,
@@ -137,6 +139,10 @@ export const handleGoogleOAuthCallback = async (request, response) => {
           );
           if (!acceptedInvitation) throw new Error("Invitation is no longer pending");
         });
+      } catch (error) {
+        if (!(error instanceof WorkspaceLimitError)) throw error;
+        await issueSession(response, authenticatedUser);
+        return response.redirect(`${frontendUrl()}/workspaces?inviteError=limit`);
       } finally {
         await session.endSession();
       }
@@ -145,7 +151,7 @@ export const handleGoogleOAuthCallback = async (request, response) => {
     await issueSession(response, authenticatedUser);
     void notifyAuthActivity(authenticatedUser, "sign-in");
 
-    return response.redirect(`${frontendUrl()}/dashboard`);
+    return response.redirect(`${frontendUrl()}/workspaces`);
   } catch (error) {
     console.error("Google OAuth callback error:", error);
     return response.redirect(`${frontendUrl()}/login?authError=google`);
