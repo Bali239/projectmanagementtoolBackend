@@ -21,6 +21,23 @@ export const requireWorkspace = async (request, response, next) => {
   return next();
 };
 
+export const requireWorkspaceById = async (request, response, next) => {
+  const workspaceId = request.params.workspaceId;
+  if (!/^[a-f\d]{24}$/i.test(workspaceId || "")) {
+    return response.status(400).json({ error: "Invalid workspace ID." });
+  }
+
+  const membership = await WorkspaceMember.findOne({ userId: request.authenticatedUserId, workspaceId })
+    .populate("workspaceId");
+  if (!membership?.workspaceId) {
+    return response.status(403).json({ error: "You do not belong to this workspace." });
+  }
+
+  request.workspaceMembership = membership;
+  request.workspace = membership.workspaceId;
+  return next();
+};
+
 export const requireWorkspaceAdmin = (request, response, next) => {
   if (request.workspaceMembership?.role !== "admin") {
     return response.status(403).json({ error: "Workspace admin access is required." });

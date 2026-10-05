@@ -49,3 +49,16 @@ export async function releaseWorkspaceMembership(userId, session) {
   );
   if (result.modifiedCount !== 1) throw new Error("Workspace membership count could not be updated.");
 }
+
+export async function releaseWorkspaceCreation(userId, session) {
+  const result = await User.updateOne(
+    {
+      _id: userId,
+      createdWorkspaceCount: { $gt: 0 },
+      workspaceMembershipCount: { $gt: 0 },
+    },
+    { $inc: { createdWorkspaceCount: -1, workspaceMembershipCount: -1 } },
+    { session }
+  );
+  if (result.modifiedCount !== 1) throw new Error("Workspace creation count could not be updated.");
+}

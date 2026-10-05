@@ -4,7 +4,7 @@ import User from "../src/models/user.model.js";
 import WorkspaceMember from "../src/models/workspace-member.model.js";
 import Workspace from "../src/models/workspace.model.js";
 import Task from "../src/models/task.model.js";
-import { requireWorkspace, requireWorkspaceAdmin, requireWorkspaceCreator } from "../src/middlewares/workspace.middleware.js";
+import { requireWorkspace, requireWorkspaceAdmin, requireWorkspaceById, requireWorkspaceCreator } from "../src/middlewares/workspace.middleware.js";
 import { localDueDateToUtc } from "../src/utils/date-time.js";
 import { parseWorkspaceInvitationCsv, WorkspaceCsvError } from "../src/utils/workspace-invitation-csv.js";
 import { getLocalReminderSlot } from "../src/services/overdue-task-scheduler.service.js";
@@ -18,6 +18,7 @@ import cron from "node-cron";
 import {
   reserveWorkspaceCreation,
   reserveWorkspaceMembership,
+  releaseWorkspaceCreation,
   WorkspaceLimitError,
 } from "../src/services/workspace-capacity.service.js";
 
@@ -277,4 +278,47 @@ test("workspace update schema validates names but permits photo-only updates", (
   assert.equal(updateWorkspaceSchema.safeParse({ name: "  Studio  " }).data.name, "Studio");
   assert.equal(updateWorkspaceSchema.safeParse({}).success, true);
   assert.equal(updateWorkspaceSchema.safeParse({ name: " " }).success, false);
+});
+
+test("workspace-ID middleware authorizes only an existing user membership", async () => {
+  const originalFindOne = WorkspaceMember.findOne;
+  let lookupFilter;
+  const membership = { workspaceId: { _id: "workspace-id" }, role: "admin" };
+  WorkspaceMember.findOne = (filter) => {
+    lookupFilter = filter;
+    return { populate: async () => membership };
+  };
+  const request = { authenticatedUserId: "user-id", params: { workspaceId: "507f1f77bcf86cd799439011" } };
+  const response = mockResponse();
+  let nextCalled = false;
+  try {
+    await requireWorkspaceById(request, response, () => { nextCalled = true; });
+  } finally {
+    WorkspaceMember.findOne = originalFindOne;
+  }
+  assert.deepEqual(lookupFilter, { userId: "user-id", workspaceId: "507f1f77bcf86cd799439011" });
+  assert.equal(request.workspaceMembership, membership);
+  assert.equal(request.workspace, membership.workspaceId);
+  assert.equal(nextCalled, true);
+});
+
+test("deleting a created workspace releases both creator capacity counters", async () => {
+  const originalUpdateOne = User.updateOne;
+  let updateArguments;
+  User.updateOne = async (...arguments_) => {
+    updateArguments = arguments_;
+    return { modifiedCount: 1 };
+  };
+  try {
+    await releaseWorkspaceCreation("user-id", "session");
+  } finally {
+    User.updateOne = originalUpdateOne;
+  }
+  assert.deepEqual(updateArguments[0], {
+    _id: "user-id",
+    createdWorkspaceCount: { $gt: 0 },
+    workspaceMembershipCount: { $gt: 0 },
+  });
+  assert.deepEqual(updateArguments[1], { $inc: { createdWorkspaceCount: -1, workspaceMembershipCount: -1 } });
+  assert.equal(updateArguments[2].session, "session");
 });

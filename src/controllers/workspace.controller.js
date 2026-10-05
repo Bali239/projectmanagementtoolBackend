@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import Task from "../models/task.model.js";
+import TaskStatusEvent from "../models/task-status-event.model.js";
 import User from "../models/user.model.js";
 import Workspace from "../models/workspace.model.js";
 import WorkspaceInvitation from "../models/workspace-invitation.model.js";
@@ -11,6 +12,7 @@ import { CloudinaryConfigurationError } from "../config/cloudinary.js";
 import { deleteWorkspacePhoto, uploadWorkspacePhoto } from "../services/workspace-photo.service.js";
 import {
   releaseWorkspaceMembership,
+  releaseWorkspaceCreation,
   reserveWorkspaceCreation,
   reserveWorkspaceMembership,
   WorkspaceLimitError,
@@ -76,6 +78,19 @@ export const createWorkspace = async (request, response) => {
   if (!input) return;
 
   const timezone = input.timezone || process.env.DEFAULT_WORKSPACE_TIMEZONE || "UTC";
+  let uploadedPhoto;
+  if (request.file) {
+    try {
+      uploadedPhoto = await uploadWorkspacePhoto(request.file.buffer);
+    } catch (error) {
+      if (error instanceof CloudinaryConfigurationError) {
+        return response.status(503).json({ error: error.message });
+      }
+      console.error("Workspace photo upload failed:", error.message);
+      return response.status(502).json({ error: "Workspace photo could not be uploaded." });
+    }
+  }
+
   const session = await mongoose.startSession();
   let workspace;
   try {
@@ -85,6 +100,8 @@ export const createWorkspace = async (request, response) => {
         name: input.name,
         timezone,
         createdBy: request.authenticatedUserId,
+        photoUrl: uploadedPhoto?.url || null,
+        photoPublicId: uploadedPhoto?.publicId || null,
       }], { session });
       await WorkspaceMember.create([{
         workspaceId: workspace._id,
@@ -100,6 +117,11 @@ export const createWorkspace = async (request, response) => {
       });
     });
   } catch (error) {
+    if (uploadedPhoto) {
+      await deleteWorkspacePhoto(uploadedPhoto.publicId).catch((cleanupError) => {
+        console.error("Workspace photo cleanup failed:", cleanupError.message);
+      });
+    }
     if (error instanceof WorkspaceLimitError) return response.status(error.statusCode).json({ error: error.message });
     if (error.code === 11000) return response.status(409).json({ error: "You already belong to this workspace." });
     throw error;
@@ -156,6 +178,50 @@ export const updateWorkspace = async (request, response) => {
   return response.json({
     workspace: toWorkspace(workspace, request.workspaceMembership.role, request.authenticatedUserId),
   });
+};
+
+export const deleteWorkspace = async (request, response) => {
+  let photoPublicId;
+  let workspaceDeleted = false;
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const workspace = await Workspace.findById(request.workspace._id)
+        .select("+photoPublicId")
+        .session(session);
+      if (!workspace) return;
+
+      const memberships = await WorkspaceMember.find({ workspaceId: workspace._id })
+        .select("userId")
+        .session(session)
+        .lean();
+      for (const membership of memberships) {
+        if (String(membership.userId) === String(workspace.createdBy)) {
+          await releaseWorkspaceCreation(membership.userId, session);
+        } else {
+          await releaseWorkspaceMembership(membership.userId, session);
+        }
+      }
+
+      await Task.deleteMany({ workspaceId: workspace._id }, { session });
+      await TaskStatusEvent.deleteMany({ workspaceId: workspace._id }, { session });
+      await WorkspaceInvitation.deleteMany({ workspaceId: workspace._id }, { session });
+      await WorkspaceMember.deleteMany({ workspaceId: workspace._id }, { session });
+      await Workspace.deleteOne({ _id: workspace._id }, { session });
+      photoPublicId = workspace.photoPublicId;
+      workspaceDeleted = true;
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  if (!workspaceDeleted) return response.status(404).json({ error: "Workspace not found." });
+  if (photoPublicId) {
+    await deleteWorkspacePhoto(photoPublicId).catch((error) => {
+      console.error("Workspace photo cleanup failed:", error.message);
+    });
+  }
+  return response.status(204).end();
 };
 
 export const listWorkspaceMembers = async (request, response) => {
