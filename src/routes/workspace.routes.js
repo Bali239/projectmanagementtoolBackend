@@ -9,6 +9,7 @@ import {
   createWorkspace,
   deleteWorkspace,
   getCurrentWorkspace,
+  leaveWorkspace,
   importWorkspaceInvitations,
   listInvitations,
   listUserWorkspaces,
@@ -32,6 +33,7 @@ router.delete("/:workspaceId", verifyRequestOrigin, authenticateUser, requireWor
 
 router.use(verifyRequestOrigin, authenticateUser, requireWorkspace);
 router.get("/members", listWorkspaceMembers);
+router.delete("/members/me", leaveWorkspace);
 router.delete("/members/:userId", requireWorkspaceAdmin, removeWorkspaceMember);
 router.get("/invitations", requireWorkspaceAdmin, listInvitations);
 router.post("/invitations", requireWorkspaceAdmin, invitationRateLimit, createInvitation);

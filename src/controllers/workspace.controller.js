@@ -450,3 +450,34 @@ export const acceptInvitation = async (request, response) => {
   const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
   return response.json({ workspace: toWorkspace(workspace, "member", request.authenticatedUserId) });
 };
+
+export const leaveWorkspace = async (request, response) => {
+  if (request.workspaceMembership.role !== "member") {
+    return response.status(403).json({ error: "Workspace admins must delete the workspace to leave it." });
+  }
+
+  const session = await mongoose.startSession();
+  let leftWorkspace = false;
+  try {
+    await session.withTransaction(async () => {
+      const membership = await WorkspaceMember.findOneAndDelete({
+        workspaceId: request.workspace._id,
+        userId: request.authenticatedUserId,
+        role: "member",
+      }).session(session);
+      if (!membership) return;
+      await releaseWorkspaceMembership(request.authenticatedUserId, session);
+      await Task.updateMany(
+        { workspaceId: request.workspace._id, assigneeId: request.authenticatedUserId },
+        { $set: { assigneeId: null } },
+        { session }
+      );
+      leftWorkspace = true;
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  if (!leftWorkspace) return response.status(404).json({ error: "Workspace membership not found." });
+  return response.status(204).end();
+};
