@@ -21,7 +21,7 @@ import {
 } from "../controllers/workspace.controller.js";
 
 const router = Router();
-const invitationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false });
+const invitationRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, validate: { forwardedHeader: false } });
 
 router.get("/", verifyRequestOrigin, authenticateUser, listUserWorkspaces);
 router.get("/current", verifyRequestOrigin, authenticateUser, getCurrentWorkspace);

@@ -18,10 +18,11 @@ import {
 } from "../controllers/auth.controller.js";
 
 const router = Router();
-const oauthRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
-const credentialRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false });
-const resetRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
-const verificationRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
+const rateLimitOptions = { standardHeaders: "draft-8", legacyHeaders: false, validate: { forwardedHeader: false } };
+const oauthRateLimit = rateLimit({ ...rateLimitOptions, windowMs: 15 * 60 * 1000, limit: 20 });
+const credentialRateLimit = rateLimit({ ...rateLimitOptions, windowMs: 15 * 60 * 1000, limit: 10 });
+const resetRateLimit = rateLimit({ ...rateLimitOptions, windowMs: 15 * 60 * 1000, limit: 5 });
+const verificationRateLimit = rateLimit({ ...rateLimitOptions, windowMs: 15 * 60 * 1000, limit: 5 });
 
 router.post("/signup", verifyRequestOrigin, credentialRateLimit, signupWithEmail);
 router.post("/login", verifyRequestOrigin, credentialRateLimit, loginWithEmail);

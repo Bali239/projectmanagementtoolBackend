@@ -10,6 +10,9 @@ import { allowedOrigins } from "./config/origins.js";
 
 const app = express();
 
+// Render terminates TLS in its load balancer and forwards the client address.
+app.set("trust proxy", 1);
+
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cookieParser());
@@ -23,7 +26,7 @@ app.use(
   })
 );
 app.use(express.json({ limit: "32kb" }));
-app.use("/api", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false, validate: { forwardedHeader: false } }));
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/workspaces", workspaceRoutes);
