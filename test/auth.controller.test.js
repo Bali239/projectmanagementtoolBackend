@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import bcrypt from "bcrypt";
+import app from "../src/app.js";
+import { allowedOrigins } from "../src/config/origins.js";
 import User from "../src/models/user.model.js";
 import { loginWithEmail, signupWithEmail } from "../src/controllers/auth.controller.js";
 
@@ -60,5 +63,62 @@ test("signup does not create a user or session when verification email is unavai
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("POST /api/auth/refresh rotates a valid refresh session", async () => {
+  const originalFindOne = User.findOne;
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const refreshToken = "existing-refresh-token";
+  const refreshTokenHash = createHash("sha256").update(refreshToken).digest("hex");
+  const user = {
+    _id: { toString: () => "user-123" },
+    email: "person@example.com",
+    name: "Test User",
+    picture: null,
+    emailVerified: true,
+    refreshTokenHash,
+    refreshTokenExpiresAt: new Date(Date.now() + 60_000),
+    async save() {},
+  };
+  User.findOne = async (query) => {
+    assert.equal(query.refreshTokenHash, refreshTokenHash);
+    assert.equal(query.emailVerified, true);
+    assert.ok(query.refreshTokenExpiresAt.$gt instanceof Date);
+    return user;
+  };
+  process.env.JWT_SECRET = "test-jwt-secret-that-is-at-least-32-characters";
+
+  const server = app.listen(0, "127.0.0.1");
+  try {
+    await new Promise((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/auth/refresh`, {
+      method: "POST",
+      headers: {
+        cookie: `refreshToken=${refreshToken}`,
+        origin: [...allowedOrigins][0],
+      },
+    });
+    const responseBody = await response.json();
+    const setCookie = response.headers.get("set-cookie") || "";
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(responseBody.user, {
+      uid: "user-123",
+      email: "person@example.com",
+      displayName: "Test User",
+      photoURL: null,
+    });
+    assert.notEqual(user.refreshTokenHash, refreshTokenHash);
+    assert.match(setCookie, /accessToken=/);
+    assert.match(setCookie, /refreshToken=.*Path=\/api\/auth/);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    User.findOne = originalFindOne;
+    if (originalJwtSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = originalJwtSecret;
   }
 });

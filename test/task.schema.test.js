@@ -9,6 +9,7 @@ test("task input trims text and normalizes empty due fields", () => {
     status: "todo",
     dueDate: "",
     dueTime: "09:30",
+    assigneeId: "",
   });
 
   assert.equal(result.success, true);
@@ -18,6 +19,7 @@ test("task input trims text and normalizes empty due fields", () => {
     status: "todo",
     dueDate: null,
     dueTime: null,
+    assigneeId: null,
   });
 });
 

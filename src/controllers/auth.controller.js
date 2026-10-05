@@ -1,10 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcrypt";
 import User from "../models/user.model.js";
+import WorkspaceInvitation from "../models/workspace-invitation.model.js";
+import WorkspaceMember from "../models/workspace-member.model.js";
+import Workspace from "../models/workspace.model.js";
 import { emailSchemaInput, emailVerificationSchema, loginSchema, resetPasswordSchema, signupSchema } from "../schemas/auth.schema.js";
 import { isEmailServiceConfigured, sendEmailVerificationEmail, sendPasswordResetEmail } from "../services/email.service.js";
 import { notifyAuthActivity } from "../services/auth-notification.service.js";
 import { clearSessionCookie, issueSession, toAuthUser } from "../utils/session.js";
+import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 
 const passwordHashRounds = 12;
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -29,6 +33,16 @@ export const signupWithEmail = async (request, response) => {
   if (!input) return;
   if (!isEmailServiceConfigured()) {
     return response.status(503).json({ error: emailServiceUnavailableMessage() });
+  }
+
+  if (input.inviteToken) {
+    const invitation = await WorkspaceInvitation.findOne({
+      email: input.email,
+      tokenHash: createHash("sha256").update(input.inviteToken).digest("hex"),
+      status: "pending",
+      expiresAt: { $gt: new Date() },
+    });
+    if (!invitation) return response.status(400).json({ error: "This invitation does not match your email or has expired." });
   }
 
   const passwordHash = await bcrypt.hash(input.password, passwordHashRounds);
@@ -59,6 +73,7 @@ export const signupWithEmail = async (request, response) => {
 
     const verificationUrl = new URL("/verify-email", frontendUrl());
     verificationUrl.searchParams.set("token", verificationToken);
+    if (input.inviteToken) verificationUrl.searchParams.set("inviteToken", input.inviteToken);
     try {
       await sendEmailVerificationEmail({ email: user.email, name: user.name, verificationUrl: verificationUrl.toString() });
     } catch (error) {
@@ -138,7 +153,52 @@ export const verifyEmailAddress = async (request, response) => {
   user.emailVerificationTokenHash = undefined;
   user.emailVerificationExpiresAt = undefined;
   await user.save();
-  return response.json({ message: "Email verified. You can now sign in." });
+
+  const pendingInvitation = await WorkspaceInvitation.findOne({
+    email: user.email.toLowerCase(),
+    status: "pending",
+    expiresAt: { $gt: new Date() },
+  });
+  let joinedWorkspace = false;
+  if (pendingInvitation && !(await WorkspaceMember.exists({ userId: user._id }))) {
+    const session = await User.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const invitedWorkspace = await Workspace.findById(pendingInvitation.workspaceId)
+          .select("timezone")
+          .session(session);
+        await WorkspaceMember.create([{
+          workspaceId: pendingInvitation.workspaceId,
+          userId: user._id,
+          role: "member",
+        }], { session });
+        await migrateLegacyTasks({
+          userId: user._id,
+          workspaceId: pendingInvitation.workspaceId,
+          timezone: invitedWorkspace.timezone,
+          session,
+        });
+        const accepted = await WorkspaceInvitation.findOneAndUpdate(
+          { _id: pendingInvitation._id, status: "pending", expiresAt: { $gt: new Date() } },
+          { $set: { status: "accepted", acceptedAt: new Date() } },
+          { new: true, session }
+        );
+        if (!accepted) throw new Error("Invitation is no longer pending");
+      });
+      joinedWorkspace = true;
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  return response.json({
+    message: joinedWorkspace
+      ? "Email verified and workspace invitation accepted. You can now sign in."
+      : "Email verified. You can now sign in.",
+    workspaceJoined: joinedWorkspace,
+  });
 };
 
 export const resendEmailVerification = async (request, response) => {

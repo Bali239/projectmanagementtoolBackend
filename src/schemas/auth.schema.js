@@ -13,6 +13,7 @@ export const signupSchema = z.object({
   name: z.string().trim().min(2, "Enter your name.").max(80, "Name is too long."),
   email: emailSchema,
   password: passwordSchema,
+  inviteToken: z.string().regex(/^[a-f\d]{64}$/i).optional(),
 });
 
 export const loginSchema = z.object({

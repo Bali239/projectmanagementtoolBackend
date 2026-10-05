@@ -101,6 +101,191 @@ export async function sendPasswordResetEmail({ email, name, resetUrl }) {
   });
 }
 
+export async function sendTaskAssignedEmail({ task, assignee }) {
+  if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE === "true" || port === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+  const safeName = escapeHtml(assignee.name || "there");
+  const safeTitle = escapeHtml(task.title);
+  const dashboardUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/dashboard`;
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: assignee.email,
+    subject: `Task assigned: ${task.title}`,
+    text: `Hi ${assignee.name || "there"},\n\nYou have been assigned the task "${task.title}".\n\nOpen your workspace: ${dashboardUrl}`,
+    html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f4f8f6;font-family:Arial,sans-serif;color:#17211f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px;background:#f4f8f6">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dce8e3;border-radius:12px">
+          <tr><td style="padding:32px 36px">
+            <p style="margin:0 0 24px;color:#087568;font-size:14px;font-weight:700">LetsDo</p>
+            <h1 style="margin:0 0 16px;font-size:24px;line-height:1.3">A task was assigned to you</h1>
+            <p style="margin:0 0 24px;color:#53615d;font-size:15px;line-height:1.6">Hi ${safeName}, you are responsible for:</p>
+            <p style="margin:0 0 24px;padding:16px;border:1px solid #e3ebe7;border-radius:8px;font-size:16px;font-weight:600">${safeTitle}</p>
+            <p style="margin:0"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#087568;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none">Open workspace</a></p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`,
+  });
+}
+
+export async function sendWorkspaceInvitationEmail({ email, workspaceName, inviterName, inviteUrl, expiresAt }) {
+  if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE === "true" || port === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+  const safeWorkspaceName = escapeHtml(workspaceName);
+  const safeInviterName = escapeHtml(inviterName || "A workspace admin");
+  const expirationLabel = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(expiresAt);
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: email,
+    subject: `Invitation to join ${workspaceName}`,
+    text: `Hi,\n\n${inviterName || "A workspace admin"} invited you to join ${workspaceName} on LetsDo.\n\nAccept the invitation: ${inviteUrl}\n\nThis invitation expires ${expirationLabel} UTC.`,
+    html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f4f8f6;font-family:Arial,sans-serif;color:#17211f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px;background:#f4f8f6">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dce8e3;border-radius:12px">
+          <tr><td style="padding:32px 36px">
+            <p style="margin:0 0 24px;color:#087568;font-size:14px;font-weight:700">LetsDo</p>
+            <h1 style="margin:0 0 16px;font-size:24px;line-height:1.3">Join ${safeWorkspaceName}</h1>
+            <p style="margin:0 0 24px;color:#53615d;font-size:15px;line-height:1.6">${safeInviterName} invited you to collaborate in their workspace. Sign in or create an account with this email address to join.</p>
+            <p style="margin:0 0 20px"><a href="${escapeHtml(inviteUrl)}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#087568;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none">Accept invitation</a></p>
+            <p style="margin:0;color:#83908b;font-size:12px;line-height:1.6">This invitation expires ${escapeHtml(expirationLabel)} UTC. If you were not expecting it, you can ignore this email.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`,
+  });
+}
+
+export async function sendOverdueTaskEmail({ task, recipient, assigneeName, workspaceName }) {
+  if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE === "true" || port === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+  const safeTitle = escapeHtml(task.title);
+  const safeWorkspaceName = escapeHtml(workspaceName);
+  const safeAssigneeName = escapeHtml(assigneeName || "the assignee");
+  const isAssignee = recipient.email === task.assigneeId?.email;
+  const dashboardUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/dashboard`;
+  const intro = isAssignee
+    ? `The task assigned to you in ${safeWorkspaceName} is overdue.`
+    : `${safeAssigneeName}'s task in ${safeWorkspaceName} is overdue.`;
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: recipient.email,
+    subject: `Overdue task: ${task.title}`,
+    text: `Hello ${recipient.name || "there"},\n\n${intro}\n\nTask: ${task.title}\n\nOpen your workspace: ${dashboardUrl}`,
+    html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f4f8f6;font-family:Arial,sans-serif;color:#17211f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px;background:#f4f8f6">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dce8e3;border-radius:12px">
+          <tr><td style="padding:32px 36px">
+            <p style="margin:0 0 24px;color:#087568;font-size:14px;font-weight:700">LetsDo</p>
+            <h1 style="margin:0 0 16px;font-size:24px;line-height:1.3">Task overdue</h1>
+            <p style="margin:0 0 24px;color:#53615d;font-size:15px;line-height:1.6">Hello ${escapeHtml(recipient.name || "there")}, ${intro}</p>
+            <p style="margin:0 0 24px;padding:16px;border:1px solid #e3ebe7;border-radius:8px;font-size:16px;font-weight:600">${safeTitle}</p>
+            <p style="margin:0"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#087568;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none">Open workspace</a></p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`,
+  });
+}
+
+export async function sendTaskStatusChangedEmail({ task, recipient, changedBy, fromStatus, toStatus, workspaceName }) {
+  if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE === "true" || port === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+  const safeTitle = escapeHtml(task.title);
+  const safeWorkspace = escapeHtml(workspaceName);
+  const safeName = escapeHtml(changedBy.name || changedBy.email);
+  const dashboardUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/dashboard`;
+  const fromLabel = fromStatus.replaceAll("-", " ");
+  const toLabel = toStatus.replaceAll("-", " ");
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: recipient.email,
+    subject: `Task status changed: ${task.title}`,
+    text: `Hello ${recipient.name || "there"},\n\n${safeName} moved "${task.title}" in ${workspaceName} from ${fromLabel} to ${toLabel}.\n\nOpen your workspace: ${dashboardUrl}`,
+    html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f4f8f6;font-family:Arial,sans-serif;color:#17211f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px;background:#f4f8f6">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dce8e3;border-radius:12px">
+          <tr><td style="padding:32px 36px">
+            <p style="margin:0 0 24px;color:#087568;font-size:14px;font-weight:700">LetsDo</p>
+            <h1 style="margin:0 0 16px;font-size:24px;line-height:1.3">Task status changed</h1>
+            <p style="margin:0 0 24px;color:#53615d;font-size:15px;line-height:1.6">${safeName} updated a task in ${safeWorkspace}.</p>
+            <p style="margin:0 0 16px;padding:16px;border:1px solid #e3ebe7;border-radius:8px;font-size:16px;font-weight:600">${safeTitle}</p>
+            <p style="margin:0 0 24px;color:#53615d;font-size:14px">${escapeHtml(fromLabel)} <span style="color:#83908b">to</span> <strong>${escapeHtml(toLabel)}</strong></p>
+            <p style="margin:0"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#087568;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none">Open workspace</a></p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`,
+  });
+}
+
 export async function sendAuthActivityEmail({ email, name, event }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 

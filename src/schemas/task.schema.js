@@ -8,6 +8,7 @@ const dateOnlySchema = z.string()
   });
 const dueDateSchema = dateOnlySchema.nullable().or(z.literal(""));
 const dueTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().or(z.literal(""));
+const assigneeIdSchema = z.string().regex(/^[a-f\d]{24}$/i).nullable().optional().or(z.literal(""));
 
 export const taskInputSchema = z.object({
   title: z.string().trim().min(1).max(160),
@@ -18,8 +19,10 @@ export const taskInputSchema = z.object({
   status: z.enum(["todo", "in-progress", "in-review", "completed"]),
   dueDate: dueDateSchema,
   dueTime: dueTimeSchema,
+  assigneeId: assigneeIdSchema,
 }).transform((task) => ({
   ...task,
   dueDate: task.dueDate || null,
   dueTime: task.dueDate ? task.dueTime || null : null,
+  assigneeId: task.assigneeId || null,
 }));

@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import authRoutes from "./routes/google.routes.js";
 import taskRoutes from "./routes/task.routes.js";
+import workspaceRoutes from "./routes/workspace.routes.js";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
 import { allowedOrigins } from "./config/origins.js";
@@ -25,6 +26,7 @@ app.use(express.json({ limit: "32kb" }));
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
+app.use("/api/workspaces", workspaceRoutes);
 app.get("/health", (request, response) => response.json({ status: "ok" }));
 app.use((request, response) => response.status(404).json({ error: "Route not found" }));
 

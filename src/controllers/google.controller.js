@@ -1,13 +1,22 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import mongoose from "mongoose";
 import googleClient from "../config/google.js";
 import { issueSession } from "../utils/session.js";
 import { resolveGoogleAccount } from "../services/google-account.service.js";
 import { notifyAuthActivity } from "../services/auth-notification.service.js";
+import WorkspaceInvitation from "../models/workspace-invitation.model.js";
+import WorkspaceMember from "../models/workspace-member.model.js";
+import Workspace from "../models/workspace.model.js";
+import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 const isProduction = process.env.NODE_ENV === "production";
 
 export const redirectToGoogleAuthorization = (request, response) => {
+  const inviteToken = typeof request.query.inviteToken === "string" ? request.query.inviteToken : "";
+  if (inviteToken && !/^[a-f\d]{64}$/i.test(inviteToken)) {
+    return response.redirect(`${frontendUrl()}/login?authError=invite`);
+  }
   const state = randomBytes(32).toString("hex");
   response.cookie("oauthState", state, {
     httpOnly: true,
@@ -16,6 +25,15 @@ export const redirectToGoogleAuthorization = (request, response) => {
     maxAge: 5 * 60 * 1000,
     path: "/api/auth",
   });
+  if (inviteToken) {
+    response.cookie("oauthInviteToken", inviteToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: "lax",
+      maxAge: 5 * 60 * 1000,
+      path: "/api/auth",
+    });
+  }
   const authorizationUrl = googleClient.generateAuthUrl({
     scope: ["openid", "email", "profile"],
     state,
@@ -27,8 +45,15 @@ export const redirectToGoogleAuthorization = (request, response) => {
 
 export const handleGoogleOAuthCallback = async (request, response) => {
   const expectedState = request.cookies?.oauthState;
+  const inviteToken = request.cookies?.oauthInviteToken;
   const receivedState = typeof request.query.state === "string" ? request.query.state : "";
   response.clearCookie("oauthState", {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: "lax",
+    path: "/api/auth",
+  });
+  response.clearCookie("oauthInviteToken", {
     httpOnly: true,
     secure: isProduction,
     sameSite: "lax",
@@ -71,6 +96,51 @@ export const handleGoogleOAuthCallback = async (request, response) => {
     }
 
     const authenticatedUser = await resolveGoogleAccount(verifiedIdentity);
+
+    if (inviteToken) {
+      const invitation = await WorkspaceInvitation.findOne({
+        tokenHash: createHash("sha256").update(inviteToken).digest("hex"),
+        status: "pending",
+        expiresAt: { $gt: new Date() },
+      });
+      if (!invitation || invitation.email !== authenticatedUser.email.toLowerCase()) {
+        await issueSession(response, authenticatedUser);
+        return response.redirect(`${frontendUrl()}/dashboard?inviteError=invalid`);
+      }
+
+      if (await WorkspaceMember.exists({ userId: authenticatedUser._id })) {
+        await issueSession(response, authenticatedUser);
+        return response.redirect(`${frontendUrl()}/dashboard?inviteError=already-member`);
+      }
+
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const invitedWorkspace = await Workspace.findById(invitation.workspaceId)
+            .select("timezone")
+            .session(session);
+          await WorkspaceMember.create([{
+            workspaceId: invitation.workspaceId,
+            userId: authenticatedUser._id,
+            role: "member",
+          }], { session });
+          await migrateLegacyTasks({
+            userId: authenticatedUser._id,
+            workspaceId: invitation.workspaceId,
+            timezone: invitedWorkspace.timezone,
+            session,
+          });
+          const acceptedInvitation = await WorkspaceInvitation.findOneAndUpdate(
+            { _id: invitation._id, status: "pending", expiresAt: { $gt: new Date() } },
+            { $set: { status: "accepted", acceptedAt: new Date() } },
+            { new: true, session }
+          );
+          if (!acceptedInvitation) throw new Error("Invitation is no longer pending");
+        });
+      } finally {
+        await session.endSession();
+      }
+    }
 
     await issueSession(response, authenticatedUser);
     void notifyAuthActivity(authenticatedUser, "sign-in");

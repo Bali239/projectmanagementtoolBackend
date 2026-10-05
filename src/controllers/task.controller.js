@@ -1,8 +1,33 @@
 import mongoose from "mongoose";
 import Task from "../models/task.model.js";
+import TaskStatusEvent from "../models/task-status-event.model.js";
+import WorkspaceMember from "../models/workspace-member.model.js";
 import { taskInputSchema } from "../schemas/task.schema.js";
+import { taskStatusInputSchema } from "../schemas/task-status.schema.js";
+import { sendTaskAssignedEmail } from "../services/email.service.js";
+import { localDueDateToUtc } from "../utils/date-time.js";
+import { taskStatusFilter } from "../utils/task-access.js";
+
+async function validateAssignee(assigneeId, workspaceId) {
+  if (!assigneeId) return null;
+  if (!mongoose.isValidObjectId(assigneeId)) return false;
+  const member = await WorkspaceMember.findOne({ userId: assigneeId, workspaceId }).select("userId");
+  return member ? assigneeId : false;
+}
+
+async function notifyAssignee(task, previousAssigneeId) {
+  if (!task.assigneeId || String(task.assigneeId) === String(previousAssigneeId || "")) return;
+  const assignedTask = await Task.findById(task._id).populate("assigneeId", "email name");
+  if (!assignedTask?.assigneeId?.email) return;
+  try {
+    await sendTaskAssignedEmail({ task: assignedTask, assignee: assignedTask.assigneeId });
+  } catch (error) {
+    console.error("Task assignment email failed:", error.message);
+  }
+}
 
 function toBoardTask(task) {
+  const assignee = task.assigneeId?.name ? task.assigneeId : null;
   return {
     id: task._id.toString(),
     title: task.title,
@@ -10,6 +35,13 @@ function toBoardTask(task) {
     status: task.status,
     dueDate: task.dueDate,
     dueTime: task.dueTime,
+    assigneeId: assignee?._id?.toString() || task.assigneeId?.toString() || null,
+    assignee: assignee ? {
+      id: assignee._id.toString(),
+      name: assignee.name,
+      email: assignee.email,
+      picture: assignee.picture,
+    } : null,
     createdAt: task.createdAt.toISOString(),
   };
 }
@@ -27,10 +59,13 @@ function parseTaskInput(request, response) {
 
 export const listTasks = async (request, response) => {
   const query = typeof request.query.q === "string" ? request.query.q.trim().slice(0, 100) : "";
-  const filter = { userId: request.authenticatedUserId };
+  const filter = { workspaceId: request.workspace._id };
+  if (request.workspaceMembership.role === "member") {
+    filter.assigneeId = request.authenticatedUserId;
+  }
   if (query) filter.title = { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
 
-  const tasks = await Task.find(filter).sort({ createdAt: -1 }).lean();
+  const tasks = await Task.find(filter).populate("assigneeId", "name email picture").sort({ createdAt: -1 }).lean();
   return response.json(tasks.map(toBoardTask));
 };
 
@@ -38,7 +73,16 @@ export const createTask = async (request, response) => {
   const input = parseTaskInput(request, response);
   if (!input) return;
 
-  const task = await Task.create({ ...input, userId: request.authenticatedUserId });
+  const assigneeId = await validateAssignee(input.assigneeId, request.workspace._id);
+  if (assigneeId === false) return response.status(400).json({ error: "Assignee must be a member of this workspace." });
+
+  const task = await Task.create({
+    ...input,
+    dueAt: localDueDateToUtc(input.dueDate, input.dueTime, request.workspace.timezone),
+    userId: request.authenticatedUserId,
+    workspaceId: request.workspace._id,
+  });
+  await notifyAssignee(task, null);
   return response.status(201).json(toBoardTask(task));
 };
 
@@ -50,13 +94,80 @@ export const updateTask = async (request, response) => {
   const input = parseTaskInput(request, response);
   if (!input) return;
 
+  const assigneeId = await validateAssignee(input.assigneeId, request.workspace._id);
+  if (assigneeId === false) return response.status(400).json({ error: "Assignee must be a member of this workspace." });
+
+  const previousTask = await Task.findOne({ _id: request.params.id, workspaceId: request.workspace._id }).select("assigneeId status");
+  if (!previousTask) return response.status(404).json({ error: "Task not found" });
+
   const task = await Task.findOneAndUpdate(
-    { _id: request.params.id, userId: request.authenticatedUserId },
-    { $set: input },
+    { _id: request.params.id, workspaceId: request.workspace._id },
+    { $set: { ...input, dueAt: localDueDateToUtc(input.dueDate, input.dueTime, request.workspace.timezone) } },
     { new: true, runValidators: true }
   );
   if (!task) return response.status(404).json({ error: "Task not found" });
+  if (previousTask.status !== task.status) {
+    await TaskStatusEvent.create({
+      workspaceId: request.workspace._id,
+      taskId: task._id,
+      changedBy: request.authenticatedUserId,
+      fromStatus: previousTask.status,
+      toStatus: task.status,
+    });
+  }
+  await notifyAssignee(task, previousTask.assigneeId);
   return response.json(toBoardTask(task));
+};
+
+export const updateTaskStatus = async (request, response) => {
+  if (!mongoose.isValidObjectId(request.params.id)) {
+    return response.status(400).json({ error: "Invalid task ID" });
+  }
+  const validation = taskStatusInputSchema.safeParse(request.body);
+  if (!validation.success) {
+    return response.status(400).json({ error: "Invalid task status", details: validation.error.flatten() });
+  }
+
+  const session = await mongoose.startSession();
+  let task;
+  try {
+    await session.withTransaction(async () => {
+      const taskFilter = taskStatusFilter({
+        taskId: request.params.id,
+        workspaceId: request.workspace._id,
+        userId: request.authenticatedUserId,
+        role: request.workspaceMembership.role,
+      });
+
+      const existingTask = await Task.findOne(taskFilter).select("status").session(session);
+      if (!existingTask) return;
+      if (existingTask.status === validation.data.status) {
+        task = await Task.findById(existingTask._id).session(session);
+        return;
+      }
+
+      task = await Task.findOneAndUpdate(
+        { ...taskFilter, status: existingTask.status },
+        { $set: { status: validation.data.status } },
+        { new: true, runValidators: true, session }
+      );
+      if (!task) throw new Error("Task status changed concurrently. Refresh and try again.");
+
+      await TaskStatusEvent.create([{
+        workspaceId: request.workspace._id,
+        taskId: task._id,
+        changedBy: request.authenticatedUserId,
+        fromStatus: existingTask.status,
+        toStatus: task.status,
+      }], { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  if (!task) return response.status(404).json({ error: "Task not found" });
+  const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
+  return response.json(toBoardTask(populatedTask));
 };
 
 export const deleteTask = async (request, response) => {
@@ -66,8 +177,9 @@ export const deleteTask = async (request, response) => {
 
   const task = await Task.findOneAndDelete({
     _id: request.params.id,
-    userId: request.authenticatedUserId,
+    workspaceId: request.workspace._id,
   });
   if (!task) return response.status(404).json({ error: "Task not found" });
+  await TaskStatusEvent.deleteMany({ taskId: task._id, processedAt: null });
   return response.status(204).end();
 };

@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+const timezoneSchema = z.string().trim().refine((timezone) => {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}, "must be a valid IANA timezone");
+
+const reminderTimesSchema = z.string().refine((value) => {
+  const times = value.split(",").map((time) => time.trim());
+  return times.length === 2 && new Set(times).size === 2 && times.every((time) => /^([01]\d|2[0-3]):[0-5]\d$/.test(time));
+}, "must contain two distinct HH:mm times separated by a comma");
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(5000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -17,6 +31,8 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
+  DEFAULT_WORKSPACE_TIMEZONE: timezoneSchema.default("UTC"),
+  OVERDUE_REMINDER_TIMES: reminderTimesSchema.default("09:00,17:00"),
 }).refine((env) => env.MONGODB_URI || env.MONGO_URL, {
   message: "MONGODB_URI is required",
   path: ["MONGODB_URI"],
