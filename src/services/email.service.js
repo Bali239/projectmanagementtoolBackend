@@ -192,43 +192,6 @@ export async function sendOverdueTaskEmail({ task, recipient, assigneeName, work
   });
 }
 
-export async function sendTaskStatusChangedEmail({ task, recipient, changedBy, fromStatus, toStatus, workspaceName }) {
-  if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
-
-  const safeTitle = escapeHtml(task.title);
-  const safeWorkspace = escapeHtml(workspaceName);
-  const safeName = escapeHtml(changedBy.name || changedBy.email);
-  const dashboardUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/dashboard`;
-  const fromLabel = fromStatus.replaceAll("-", " ");
-  const toLabel = toStatus.replaceAll("-", " ");
-
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM,
-    to: recipient.email,
-    subject: `Task status changed: ${task.title}`,
-    text: `Hello ${recipient.name || "there"},\n\n${safeName} moved "${task.title}" in ${workspaceName} from ${fromLabel} to ${toLabel}.\n\nOpen your workspace: ${dashboardUrl}`,
-    html: `<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#f4f8f6;font-family:Arial,sans-serif;color:#17211f">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px;background:#f4f8f6">
-      <tr><td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #dce8e3;border-radius:12px">
-          <tr><td style="padding:32px 36px">
-            <p style="margin:0 0 24px;color:#087568;font-size:14px;font-weight:700">LetsDo</p>
-            <h1 style="margin:0 0 16px;font-size:24px;line-height:1.3">Task status changed</h1>
-            <p style="margin:0 0 24px;color:#53615d;font-size:15px;line-height:1.6">${safeName} updated a task in ${safeWorkspace}.</p>
-            <p style="margin:0 0 16px;padding:16px;border:1px solid #e3ebe7;border-radius:8px;font-size:16px;font-weight:600">${safeTitle}</p>
-            <p style="margin:0 0 24px;color:#53615d;font-size:14px">${escapeHtml(fromLabel)} <span style="color:#83908b">to</span> <strong>${escapeHtml(toLabel)}</strong></p>
-            <p style="margin:0"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#087568;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none">Open workspace</a></p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-  </body>
-</html>`,
-  });
-}
-
 export async function sendAuthActivityEmail({ email, name, event }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
