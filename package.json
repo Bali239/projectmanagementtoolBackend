@@ -30,6 +30,7 @@
     "node-cron": "^4.6.0",
     "nodemailer": "^10.0.13",
     "nodemon": "^3.1.14",
+    "socket.io": "^4.8.4",
     "zod": "^4.6.5"
   },
   "allowScripts": {

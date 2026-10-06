@@ -11,10 +11,8 @@ import { getLocalReminderSlot } from "../src/services/overdue-task-scheduler.ser
 import { migrateLegacyTasks } from "../src/utils/migrate-legacy-tasks.js";
 import { taskStatusInputSchema } from "../src/schemas/task-status.schema.js";
 import { taskStatusFilter } from "../src/utils/task-access.js";
-import { taskStatusNotificationCronExpression } from "../src/services/task-status-notification.service.js";
 import { listUserWorkspaces } from "../src/controllers/workspace.controller.js";
 import { updateWorkspaceSchema } from "../src/schemas/workspace.schema.js";
-import cron from "node-cron";
 import {
   reserveWorkspaceCreation,
   reserveWorkspaceMembership,
@@ -250,11 +248,6 @@ test("admins can change status of any task in their workspace", () => {
     _id: "task-id",
     workspaceId: "workspace-id",
   });
-});
-
-test("task status notification cron runs every minute", () => {
-  assert.equal(taskStatusNotificationCronExpression, "* * * * *");
-  assert.equal(cron.validate(taskStatusNotificationCronExpression), true);
 });
 
 test("workspace stores a public photo URL and private Cloudinary asset ID", () => {
