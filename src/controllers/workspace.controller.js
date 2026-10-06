@@ -365,10 +365,11 @@ export const previewInvitation = async (request, response) => {
     tokenHash: tokenHash(token),
     status: "pending",
     expiresAt: { $gt: new Date() },
-  }).populate("workspaceId", "name").lean();
+  }).populate("workspaceId", "name").populate("invitedBy", "email").lean();
   if (!invitation?.workspaceId) return response.status(404).json({ error: "This invitation is invalid or expired." });
   return response.json({ invitation: {
     email: invitation.email,
+    inviterEmail: invitation.invitedBy?.email || null,
     workspaceName: invitation.workspaceId.name,
   } });
 };
