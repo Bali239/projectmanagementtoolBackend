@@ -225,6 +225,30 @@ export const deleteWorkspace = async (request, response) => {
 };
 
 export const listWorkspaceMembers = async (request, response) => {
+  const search = typeof request.query.search === "string" ? request.query.search.trim() : "";
+  if (search) {
+    if (search.length < 2) return response.json([]);
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const members = await WorkspaceMember.aggregate([
+      { $match: { workspaceId: request.workspace._id } },
+      { $lookup: { from: User.collection.name, localField: "userId", foreignField: "_id", as: "user" } },
+      { $unwind: "$user" },
+      { $match: { "user.name": { $regex: escapedSearch, $options: "i" } } },
+      { $sort: { role: 1, createdAt: 1 } },
+      { $limit: 25 },
+      { $project: {
+        _id: 0,
+        id: { $toString: "$user._id" },
+        name: "$user.name",
+        email: "$user.email",
+        picture: "$user.picture",
+        role: 1,
+        joinedAt: "$createdAt",
+      } },
+    ]);
+    return response.json(members.map((member) => ({ ...member, joinedAt: member.joinedAt.toISOString() })));
+  }
+
   const members = await WorkspaceMember.find({ workspaceId: request.workspace._id })
     .populate("userId", "name email picture")
     .sort({ role: 1, createdAt: 1 })
