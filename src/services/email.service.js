@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { transporter } from "../config/mailer.js";
 
 function escapeHtml(value) {
   return value.replace(/[&<>"']/g, (character) => ({
@@ -22,13 +22,6 @@ export function isEmailServiceConfigured() {
 export async function sendEmailVerificationEmail({ email, name, verificationUrl }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
   const safeName = escapeHtml(name || "there");
   const safeUrl = escapeHtml(verificationUrl);
 
@@ -60,16 +53,6 @@ export async function sendEmailVerificationEmail({ email, name, verificationUrl 
 export async function sendPasswordResetEmail({ email, name, resetUrl }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
   const safeName = escapeHtml(name || "there");
 
   await transporter.sendMail({
@@ -104,16 +87,6 @@ export async function sendPasswordResetEmail({ email, name, resetUrl }) {
 export async function sendTaskAssignedEmail({ task, assignee }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
-  });
   const safeName = escapeHtml(assignee.name || "there");
   const safeTitle = escapeHtml(task.title);
   const dashboardUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/dashboard`;
@@ -147,16 +120,6 @@ export async function sendTaskAssignedEmail({ task, assignee }) {
 export async function sendWorkspaceInvitationEmail({ email, workspaceName, inviterName, inviteUrl, expiresAt }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
-  });
   const safeWorkspaceName = escapeHtml(workspaceName);
   const safeInviterName = escapeHtml(inviterName || "A workspace admin");
   const expirationLabel = new Intl.DateTimeFormat("en-US", {
@@ -194,16 +157,6 @@ export async function sendWorkspaceInvitationEmail({ email, workspaceName, invit
 export async function sendOverdueTaskEmail({ task, recipient, assigneeName, workspaceName }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
-  });
   const safeTitle = escapeHtml(task.title);
   const safeWorkspaceName = escapeHtml(workspaceName);
   const safeAssigneeName = escapeHtml(assigneeName || "the assignee");
@@ -242,16 +195,6 @@ export async function sendOverdueTaskEmail({ task, recipient, assigneeName, work
 export async function sendTaskStatusChangedEmail({ task, recipient, changedBy, fromStatus, toStatus, workspaceName }) {
   if (!isEmailServiceConfigured()) throw new Error("SMTP is not configured");
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
-  });
   const safeTitle = escapeHtml(task.title);
   const safeWorkspace = escapeHtml(workspaceName);
   const safeName = escapeHtml(changedBy.name || changedBy.email);
@@ -306,16 +249,6 @@ export async function sendAuthActivityEmail({ email, name, event }) {
   const resetUrl = `${(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")}/forgot-password`;
   const subject = isSignIn ? "New sign-in to your LetsDo account" : "LetsDo sign-out confirmation";
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === "true" || port === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
-  });
 
   await transporter.sendMail({
     from: process.env.SMTP_FROM,
