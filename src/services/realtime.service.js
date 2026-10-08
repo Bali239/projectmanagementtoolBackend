@@ -47,8 +47,15 @@ export function attachRealtimeServer(server) {
 
   io.on("connection", (socket) => {
     // Rooms are selected by the server only after token and membership checks.
-    socket.join(workspaceRoom(socket.data.workspaceId));
-    if (socket.data.role === "admin") socket.join(workspaceAdminsRoom(socket.data.workspaceId));
+    const roomName = workspaceRoom(socket.data.workspaceId);
+    socket.join(roomName);
+    console.log("Socket connected:", socket.id, "user:", socket.data.userId, "role:", socket.data.role);
+    console.log("User joined room:", roomName);
+    if (socket.data.role === "admin") {
+      const adminRoomName = workspaceAdminsRoom(socket.data.workspaceId);
+      socket.join(adminRoomName);
+      console.log("User joined room:", adminRoomName);
+    }
   });
   return io;
 }
@@ -58,6 +65,7 @@ export function emitTaskListChanged(workspaceId) {
 }
 
 export function emitTaskStatusChanged(workspaceId, change) {
+  console.log("Emitting task status event:", change);
   io?.to(workspaceAdminsRoom(workspaceId)).emit("task-status:changed", change);
 }
 
