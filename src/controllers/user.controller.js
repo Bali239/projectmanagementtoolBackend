@@ -2,6 +2,16 @@ import User from "../models/user.model.js";
 import { createHash } from "node:crypto";
 import { clearSessionCookie, toAuthUser } from "../utils/session.js";
 import { notifyAuthActivity } from "../services/auth-notification.service.js";
+import jwt from "jsonwebtoken";
+
+export const createRealtimeToken = (request, response) => {
+  const token = jwt.sign(
+    { userId: request.authenticatedUserId, emailVerified: true },
+    process.env.JWT_SECRET,
+    { audience: "socket.io", expiresIn: "5m" }
+  );
+  return response.json({ token });
+};
 
 export const getCurrentUser = async (request, response) => {
   try {

@@ -4,7 +4,7 @@ import {
   redirectToGoogleAuthorization,
 } from "../controllers/google.controller.js";
 import authenticateUser from "../middlewares/auth.middleware.js";
-import { getCurrentUser, logoutCurrentUser } from "../controllers/user.controller.js";
+import { createRealtimeToken, getCurrentUser, logoutCurrentUser } from "../controllers/user.controller.js";
 import { rateLimit } from "express-rate-limit";
 import { verifyRequestOrigin } from "../middlewares/auth.middleware.js";
 import {
@@ -37,6 +37,7 @@ router.get("/google", oauthRateLimit, redirectToGoogleAuthorization);
 router.get("/google/callback", oauthRateLimit, handleGoogleOAuthCallback);
 
 router.get("/me", authenticateUser, getCurrentUser);
+router.get("/socket-token", authenticateUser, createRealtimeToken);
 
 router.post("/logout", verifyRequestOrigin, logoutCurrentUser);
 
