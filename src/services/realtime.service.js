@@ -49,10 +49,10 @@ export function attachRealtimeServer(server) {
     // Rooms are selected by the server only after token and membership checks.
     const roomName = workspaceRoom(socket.data.workspaceId);
     socket.join(roomName);
-    console.log("Socket connected:", socket.id, "user:", socket.data.userId, "role:", socket.data.role);
+    console.log("Socket connected:", socket.id, "pid:", process.pid, "user:", socket.data.userId, "role:", socket.data.role);
     console.log("User joined room:", roomName);
     socket.on("disconnect", (reason) => {
-      console.log("Socket disconnected:", socket.id, "reason:", reason);
+      console.log("Socket disconnected:", socket.id, "pid:", process.pid, "reason:", reason);
     });
     if (socket.data.role === "admin") {
       const adminRoomName = workspaceAdminsRoom(socket.data.workspaceId);
@@ -70,14 +70,20 @@ export function emitTaskListChanged(workspaceId) {
 export function emitTaskStatusChanged(workspaceId, change) {
   const roomName = workspaceRoom(workspaceId);
   const socketIds = Array.from(io?.sockets.adapter.rooms.get(roomName) || []);
-  console.log("[SOCKET] Emitting task-status:changed", {
+  console.log("[TASK STATUS] About to emit socket event", {
+    event: "task_status_changed",
     taskId: change.taskId,
     status: change.toStatus,
+    pid: process.pid,
     workspaceId: String(workspaceId),
     room: roomName,
     recipientSocketIds: socketIds,
   });
-  io?.to(roomName).emit("task-status:changed", change);
+  io.to(roomName).emit("task_status_changed", change);
+  console.log("[TASK STATUS] Socket event emitted successfully", {
+    event: "task_status_changed",
+    taskId: change.taskId,
+  });
 }
 
 export function emitWorkspaceMembersChanged(workspaceId) {

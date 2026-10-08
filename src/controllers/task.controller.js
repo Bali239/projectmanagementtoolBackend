@@ -115,7 +115,7 @@ export const updateTask = async (request, response) => {
   if (!task) return response.status(404).json({ error: "Task not found" });
   if (previousTask.status !== task.status) {
     await TaskStatusEvent.create({ workspaceId: request.workspace._id, taskId: task._id, changedBy: request.authenticatedUserId, fromStatus: previousTask.status, toStatus: task.status });
-    console.log("[DB] Task status updated:", { taskId: task._id.toString(), fromStatus: previousTask.status, toStatus: task.status });
+    console.log("[TASK STATUS] Database updated", { taskId: task._id.toString(), status: task.status, workspaceId: request.workspace._id.toString() });
     emitTaskStatusChanged(request.workspace._id, {
       taskId: task._id.toString(),
       taskTitle: task.title,
@@ -129,14 +129,16 @@ export const updateTask = async (request, response) => {
 };
 
 export const updateTaskStatus = async (request, response) => {
-  console.log("[API] Task status request:", {
-    taskId: request.params.id,
-    status: request.body?.status,
-    workspaceId: String(request.workspace?._id),
+  const taskId = request.params.id;
+  const status = request.body?.status;
+  console.log("[TASK STATUS] Request received", {
+    taskId,
+    status,
     userId: request.authenticatedUserId,
     role: request.workspaceMembership?.role,
+    workspaceId: request.workspace?._id?.toString(),
   });
-  if (!mongoose.isValidObjectId(request.params.id)) {
+  if (!mongoose.isValidObjectId(taskId)) {
     return response.status(400).json({ error: "Invalid task ID" });
   }
   const validation = taskStatusInputSchema.safeParse(request.body);
@@ -151,7 +153,7 @@ export const updateTaskStatus = async (request, response) => {
   try {
     await session.withTransaction(async () => {
       const taskFilter = taskStatusFilter({
-        taskId: request.params.id,
+        taskId,
         workspaceId: request.workspace._id,
         userId: request.authenticatedUserId,
         role: request.workspaceMembership.role,
@@ -171,6 +173,11 @@ export const updateTaskStatus = async (request, response) => {
         { new: true, runValidators: true, session }
       );
       if (!task) throw new Error("Task status changed concurrently. Refresh and try again.");
+      console.log("[TASK STATUS] Database updated", {
+        taskId: task._id.toString(),
+        status: task.status,
+        workspaceId: task.workspaceId?.toString() || request.workspace._id.toString(),
+      });
       await TaskStatusEvent.create([{ workspaceId: request.workspace._id, taskId: task._id, changedBy: request.authenticatedUserId, fromStatus, toStatus: task.status }], { session });
       statusChanged = true;
 
@@ -180,10 +187,8 @@ export const updateTaskStatus = async (request, response) => {
   }
 
   if (!task) return response.status(404).json({ error: "Task not found" });
-  const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
   if (statusChanged) {
-    console.log("[DB] Task status updated:", { taskId: task._id.toString(), fromStatus, toStatus: task.status });
-    emitTaskListChanged(request.workspace._id);
+    console.log("[TASK STATUS] Database transaction committed", { taskId: task._id.toString(), status: task.status });
     emitTaskStatusChanged(request.workspace._id, {
       taskId: task._id.toString(),
       taskTitle: task.title,
@@ -191,6 +196,7 @@ export const updateTaskStatus = async (request, response) => {
       toStatus: task.status,
     });
   }
+  const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
   return response.json(toBoardTask(populatedTask));
 };
 
