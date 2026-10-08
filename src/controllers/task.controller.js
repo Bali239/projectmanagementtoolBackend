@@ -71,21 +71,8 @@ export const listTasks = async (request, response) => {
 };
 
 export const listTaskStatusNotifications = async (request, response) => {
-  const events = await TaskStatusEvent.find({ workspaceId: request.workspace._id })
-    .sort({ createdAt: -1 })
-    .limit(30)
-    .populate("taskId", "title")
-    .populate("changedBy", "name")
-    .lean();
-
-  return response.json(events.map((event) => ({
-    id: event._id.toString(),
-    taskTitle: event.taskId?.title || "Deleted task",
-    changedBy: event.changedBy?.name || "A workspace member",
-    fromStatus: event.fromStatus,
-    toStatus: event.toStatus,
-    createdAt: event.createdAt.toISOString(),
-  })));
+  const events = await TaskStatusEvent.find({ workspaceId: request.workspace._id }).sort({ createdAt: -1 }).limit(30).populate("taskId", "title").populate("changedBy", "name").lean();
+  return response.json(events.map((event) => ({ id: event._id.toString(), taskTitle: event.taskId?.title || "Deleted task", changedBy: event.changedBy?.name || "A workspace member", fromStatus: event.fromStatus, toStatus: event.toStatus, createdAt: event.createdAt.toISOString() })));
 };
 
 export const createTask = async (request, response) => {
@@ -127,14 +114,12 @@ export const updateTask = async (request, response) => {
   );
   if (!task) return response.status(404).json({ error: "Task not found" });
   if (previousTask.status !== task.status) {
-    await TaskStatusEvent.create({
-      workspaceId: request.workspace._id,
-      taskId: task._id,
-      changedBy: request.authenticatedUserId,
+    await TaskStatusEvent.create({ workspaceId: request.workspace._id, taskId: task._id, changedBy: request.authenticatedUserId, fromStatus: previousTask.status, toStatus: task.status });
+    emitTaskStatusChanged(request.workspace._id, {
+      taskTitle: task.title,
       fromStatus: previousTask.status,
       toStatus: task.status,
     });
-    emitTaskStatusChanged(request.workspace._id);
   }
   await notifyAssignee(task, previousTask.assigneeId);
   emitTaskListChanged(request.workspace._id);
@@ -153,6 +138,7 @@ export const updateTaskStatus = async (request, response) => {
   const session = await mongoose.startSession();
   let task;
   let statusChanged = false;
+  let fromStatus;
   try {
     await session.withTransaction(async () => {
       const taskFilter = taskStatusFilter({
@@ -168,6 +154,7 @@ export const updateTaskStatus = async (request, response) => {
         task = await Task.findById(existingTask._id).session(session);
         return;
       }
+      fromStatus = existingTask.status;
 
       task = await Task.findOneAndUpdate(
         { ...taskFilter, status: existingTask.status },
@@ -175,13 +162,7 @@ export const updateTaskStatus = async (request, response) => {
         { new: true, runValidators: true, session }
       );
       if (!task) throw new Error("Task status changed concurrently. Refresh and try again.");
-      await TaskStatusEvent.create([{
-        workspaceId: request.workspace._id,
-        taskId: task._id,
-        changedBy: request.authenticatedUserId,
-        fromStatus: existingTask.status,
-        toStatus: task.status,
-      }], { session });
+      await TaskStatusEvent.create([{ workspaceId: request.workspace._id, taskId: task._id, changedBy: request.authenticatedUserId, fromStatus, toStatus: task.status }], { session });
       statusChanged = true;
 
     });
@@ -193,7 +174,11 @@ export const updateTaskStatus = async (request, response) => {
   const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
   if (statusChanged) {
     emitTaskListChanged(request.workspace._id);
-    emitTaskStatusChanged(request.workspace._id);
+    emitTaskStatusChanged(request.workspace._id, {
+      taskTitle: task.title,
+      fromStatus,
+      toStatus: validation.data.status,
+    });
   }
   return response.json(toBoardTask(populatedTask));
 };

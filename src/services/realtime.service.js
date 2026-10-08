@@ -6,7 +6,7 @@ import { allowedOrigins } from "../config/origins.js";
 let io;
 
 const workspaceRoom = (workspaceId) => `workspace:${workspaceId}`;
-const workspaceNotificationsRoom = (workspaceId) => `workspace:${workspaceId}:notifications`;
+const workspaceAdminsRoom = (workspaceId) => `workspace:${workspaceId}:admins`;
 
 export function attachRealtimeServer(server) {
   io = new Server(server, {
@@ -34,10 +34,11 @@ export function attachRealtimeServer(server) {
       if (typeof payload === "string" || !payload.userId || payload.emailVerified !== true) return next(new Error("Authentication required"));
       const workspaceId = socket.handshake.auth?.workspaceId;
       if (!/^[a-f\d]{24}$/i.test(workspaceId || "")) return next(new Error("Workspace is required"));
-    const membership = await WorkspaceMember.exists({ userId: payload.userId, workspaceId });
+      const membership = await WorkspaceMember.findOne({ userId: payload.userId, workspaceId }).select("role");
       if (!membership) return next(new Error("Workspace access denied"));
       socket.data.workspaceId = workspaceId;
       socket.data.userId = payload.userId;
+      socket.data.role = membership.role;
       return next();
     } catch {
       return next(new Error("Authentication required"));
@@ -47,7 +48,7 @@ export function attachRealtimeServer(server) {
   io.on("connection", (socket) => {
     // Rooms are selected by the server only after token and membership checks.
     socket.join(workspaceRoom(socket.data.workspaceId));
-    socket.join(workspaceNotificationsRoom(socket.data.workspaceId));
+    if (socket.data.role === "admin") socket.join(workspaceAdminsRoom(socket.data.workspaceId));
   });
   return io;
 }
@@ -56,10 +57,8 @@ export function emitTaskListChanged(workspaceId) {
   io?.to(workspaceRoom(workspaceId)).emit("tasks:changed");
 }
 
-export function emitTaskStatusChanged(workspaceId) {
-  // Send a lightweight signal; clients reload the authorized notification feed
-  // from the API so the socket never becomes a source of truth.
-  io?.to(workspaceNotificationsRoom(workspaceId)).emit("task-status:changed");
+export function emitTaskStatusChanged(workspaceId, change) {
+  io?.to(workspaceAdminsRoom(workspaceId)).emit("task-status:changed", change);
 }
 
 export function emitWorkspaceMembersChanged(workspaceId) {
