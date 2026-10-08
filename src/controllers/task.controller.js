@@ -5,7 +5,7 @@ import WorkspaceMember from "../models/workspace-member.model.js";
 import { taskInputSchema } from "../schemas/task.schema.js";
 import { taskStatusInputSchema } from "../schemas/task-status.schema.js";
 import { sendTaskAssignedEmail } from "../services/email.service.js";
-import { emitTaskListChanged } from "../services/realtime.service.js";
+import { emitTaskListChanged, emitTaskStatusChanged } from "../services/realtime.service.js";
 import { localDueDateToUtc } from "../utils/date-time.js";
 import { taskStatusFilter } from "../utils/task-access.js";
 
@@ -134,6 +134,7 @@ export const updateTask = async (request, response) => {
       fromStatus: previousTask.status,
       toStatus: task.status,
     });
+    emitTaskStatusChanged(request.workspace._id);
   }
   await notifyAssignee(task, previousTask.assigneeId);
   emitTaskListChanged(request.workspace._id);
@@ -190,7 +191,10 @@ export const updateTaskStatus = async (request, response) => {
 
   if (!task) return response.status(404).json({ error: "Task not found" });
   const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
-  if (statusChanged) emitTaskListChanged(request.workspace._id);
+  if (statusChanged) {
+    emitTaskListChanged(request.workspace._id);
+    emitTaskStatusChanged(request.workspace._id);
+  }
   return response.json(toBoardTask(populatedTask));
 };
 
