@@ -51,6 +51,9 @@ export function attachRealtimeServer(server) {
     socket.join(roomName);
     console.log("Socket connected:", socket.id, "user:", socket.data.userId, "role:", socket.data.role);
     console.log("User joined room:", roomName);
+    socket.on("disconnect", (reason) => {
+      console.log("Socket disconnected:", socket.id, "reason:", reason);
+    });
     if (socket.data.role === "admin") {
       const adminRoomName = workspaceAdminsRoom(socket.data.workspaceId);
       socket.join(adminRoomName);
@@ -65,8 +68,16 @@ export function emitTaskListChanged(workspaceId) {
 }
 
 export function emitTaskStatusChanged(workspaceId, change) {
-  console.log("Emitting task status event:", change);
-  io?.to(workspaceAdminsRoom(workspaceId)).emit("task-status:changed", change);
+  const roomName = workspaceRoom(workspaceId);
+  const socketIds = Array.from(io?.sockets.adapter.rooms.get(roomName) || []);
+  console.log("[SOCKET] Emitting task-status:changed", {
+    taskId: change.taskId,
+    status: change.toStatus,
+    workspaceId: String(workspaceId),
+    room: roomName,
+    recipientSocketIds: socketIds,
+  });
+  io?.to(roomName).emit("task-status:changed", change);
 }
 
 export function emitWorkspaceMembersChanged(workspaceId) {

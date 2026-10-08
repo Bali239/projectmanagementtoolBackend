@@ -115,7 +115,7 @@ export const updateTask = async (request, response) => {
   if (!task) return response.status(404).json({ error: "Task not found" });
   if (previousTask.status !== task.status) {
     await TaskStatusEvent.create({ workspaceId: request.workspace._id, taskId: task._id, changedBy: request.authenticatedUserId, fromStatus: previousTask.status, toStatus: task.status });
-    console.log("Task status changed:", { taskId: task._id.toString(), fromStatus: previousTask.status, toStatus: task.status });
+    console.log("[DB] Task status updated:", { taskId: task._id.toString(), fromStatus: previousTask.status, toStatus: task.status });
     emitTaskStatusChanged(request.workspace._id, {
       taskId: task._id.toString(),
       taskTitle: task.title,
@@ -129,6 +129,13 @@ export const updateTask = async (request, response) => {
 };
 
 export const updateTaskStatus = async (request, response) => {
+  console.log("[API] Task status request:", {
+    taskId: request.params.id,
+    status: request.body?.status,
+    workspaceId: String(request.workspace?._id),
+    userId: request.authenticatedUserId,
+    role: request.workspaceMembership?.role,
+  });
   if (!mongoose.isValidObjectId(request.params.id)) {
     return response.status(400).json({ error: "Invalid task ID" });
   }
@@ -175,13 +182,13 @@ export const updateTaskStatus = async (request, response) => {
   if (!task) return response.status(404).json({ error: "Task not found" });
   const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
   if (statusChanged) {
-    console.log("Task status changed:", { taskId: task._id.toString(), fromStatus, toStatus: validation.data.status });
+    console.log("[DB] Task status updated:", { taskId: task._id.toString(), fromStatus, toStatus: task.status });
     emitTaskListChanged(request.workspace._id);
     emitTaskStatusChanged(request.workspace._id, {
       taskId: task._id.toString(),
       taskTitle: task.title,
       fromStatus,
-      toStatus: validation.data.status,
+      toStatus: task.status,
     });
   }
   return response.json(toBoardTask(populatedTask));
