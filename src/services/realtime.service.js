@@ -58,3 +58,7 @@ export function emitTaskStatusChanged(workspaceId) {
   // from the API so the socket never becomes a source of truth.
   io?.to(workspaceNotificationsRoom(workspaceId)).emit("task-status:changed");
 }
+
+export function emitWorkspaceMembersChanged(workspaceId) {
+  io?.to(workspaceRoom(workspaceId)).emit("workspace:members-changed");
+}

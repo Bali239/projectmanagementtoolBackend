@@ -10,6 +10,7 @@ import { notifyAuthActivity } from "../services/auth-notification.service.js";
 import { clearSessionCookie, issueSession, toAuthUser } from "../utils/session.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 import { reserveWorkspaceMembership, WorkspaceLimitError } from "../services/workspace-capacity.service.js";
+import { emitWorkspaceMembersChanged } from "../services/realtime.service.js";
 
 const passwordHashRounds = 12;
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -161,6 +162,7 @@ export const verifyEmailAddress = async (request, response) => {
     expiresAt: { $gt: new Date() },
   });
   let joinedWorkspace = false;
+  let membershipAdded = false;
   if (pendingInvitation) {
     const existingMembership = await WorkspaceMember.findOne({
       userId: user._id,
@@ -196,6 +198,7 @@ export const verifyEmailAddress = async (request, response) => {
           );
           if (!accepted) throw new Error("Invitation is no longer pending");
         });
+        membershipAdded = true;
       }
       joinedWorkspace = true;
     } catch (error) {
@@ -203,6 +206,7 @@ export const verifyEmailAddress = async (request, response) => {
     } finally {
       await session.endSession();
     }
+    if (membershipAdded) emitWorkspaceMembersChanged(pendingInvitation.workspaceId);
   }
 
   return response.json({

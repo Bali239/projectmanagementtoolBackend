@@ -9,6 +9,7 @@ import WorkspaceMember from "../models/workspace-member.model.js";
 import Workspace from "../models/workspace.model.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 import { reserveWorkspaceMembership, WorkspaceLimitError } from "../services/workspace-capacity.service.js";
+import { emitWorkspaceMembersChanged } from "../services/realtime.service.js";
 
 const frontendUrl = () => (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 const isProduction = process.env.NODE_ENV === "production";
@@ -146,6 +147,7 @@ export const handleGoogleOAuthCallback = async (request, response) => {
       } finally {
         await session.endSession();
       }
+      emitWorkspaceMembersChanged(invitation.workspaceId);
     }
 
     await issueSession(response, authenticatedUser);

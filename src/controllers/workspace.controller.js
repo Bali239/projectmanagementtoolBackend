@@ -20,6 +20,7 @@ import {
 } from "../services/workspace-capacity.service.js";
 import { migrateLegacyTasks } from "../utils/migrate-legacy-tasks.js";
 import { parseWorkspaceInvitationCsv, WorkspaceCsvError } from "../utils/workspace-invitation-csv.js";
+import { emitWorkspaceMembersChanged } from "../services/realtime.service.js";
 
 function parseInput(schema, request, response) {
   const result = schema.safeParse(request.body);
@@ -292,6 +293,7 @@ export const removeWorkspaceMember = async (request, response) => {
     await session.endSession();
   }
   if (!removedMember) return response.status(404).json({ error: "Workspace member not found." });
+  emitWorkspaceMembersChanged(request.workspace._id);
   return response.status(204).end();
 };
 
@@ -472,6 +474,7 @@ export const acceptInvitation = async (request, response) => {
     await session.endSession();
   }
 
+  emitWorkspaceMembersChanged(invitation.workspaceId);
   const workspace = await Workspace.findById(invitation.workspaceId).select("name timezone photoUrl createdBy");
   return response.json({ workspace: toWorkspace(workspace, "member", request.authenticatedUserId) });
 };
@@ -504,5 +507,6 @@ export const leaveWorkspace = async (request, response) => {
   }
 
   if (!leftWorkspace) return response.status(404).json({ error: "Workspace membership not found." });
+  emitWorkspaceMembersChanged(request.workspace._id);
   return response.status(204).end();
 };
