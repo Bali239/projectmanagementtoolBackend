@@ -27,9 +27,9 @@ export function attachRealtimeServer(server) {
         const separator = part.indexOf("=");
         return separator < 0 ? ["", ""] : [part.slice(0, separator).trim(), decodeURIComponent(part.slice(separator + 1).trim())];
       }).filter(([key]) => key));
-      const realtimeToken = socket.handshake.auth?.token;
-      const payload = realtimeToken
-        ? jwt.verify(realtimeToken, process.env.JWT_SECRET, { audience: "socket.io" })
+      const hasRealtimeToken = Object.prototype.hasOwnProperty.call(socket.handshake.auth || {}, "token");
+      const payload = hasRealtimeToken
+        ? jwt.verify(socket.handshake.auth.token || "", process.env.JWT_SECRET, { audience: "socket.io" })
         : jwt.verify(cookies.accessToken || "", process.env.JWT_SECRET);
       if (typeof payload === "string" || !payload.userId || payload.emailVerified !== true) return next(new Error("Authentication required"));
       const workspaceId = socket.handshake.auth?.workspaceId;
