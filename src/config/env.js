@@ -25,6 +25,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   FRONTEND_URL: z.string().url().default("http://localhost:3000"),
   CORS_ALLOWED_ORIGINS: z.string().optional(),
+  REDIS_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional()),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
   SMTP_SECURE: z.enum(["true", "false"]).optional(),

@@ -8,6 +8,8 @@ Copy `.env.example` to `.env` and set the Google OAuth client credentials, a ran
 
 Set `NEXT_PUBLIC_API_URL` to `http://localhost:5000/api` for local development. On Vercel, set `NEXT_PUBLIC_API_URL=/api`, `NEXT_PUBLIC_SOCKET_URL=https://<your-render-service>.onrender.com`, and `API_PROXY_TARGET=https://<your-render-service>.onrender.com/api`; then set the backend's `GOOGLE_REDIRECT_URI` to `https://<your-vercel-domain>/api/auth/google/callback` and register that exact URI in Google Cloud. The `/api` rewrite handles HTTP requests; Socket.IO connects directly to the Express service because Vercel's rewrite does not serve its WebSocket/polling endpoint through the Next.js app. The frontend obtains a short lived Socket.IO token through `/api/auth/socket-token`, since the browser cannot send the frontend's host-only session cookie to the Render domain. Set `FRONTEND_URL` and `CORS_ALLOWED_ORIGINS` on the backend to include the exact deployed Vercel origin. The explicit socket URL can be omitted in local development.
 
+For a single backend instance, Socket.IO uses its in-memory adapter. If the backend is scaled to multiple instances, configure `REDIS_URL` with a private Redis connection URL on every instance; the Redis adapter distributes room events between instances. Configure Redis before scaling, since events are otherwise delivered only to clients connected to the instance that emitted them. Task status notifications are persisted in MongoDB; clients refresh the relevant queries on connection/reconnection, and admins acknowledge status events only after both task and notification queries have successfully refreshed.
+
 ## Run
 
 ```sh

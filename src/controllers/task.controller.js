@@ -195,6 +195,7 @@ export const updateTaskStatus = async (request, response) => {
       fromStatus,
       toStatus: task.status,
     });
+    emitTaskListChanged(request.workspace._id);
   }
   const populatedTask = await Task.findById(task._id).populate("assigneeId", "name email picture");
   return response.json(toBoardTask(populatedTask));
